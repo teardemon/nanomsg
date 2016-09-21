@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -24,9 +24,9 @@
 #include "../src/pair.h"
 #include "../src/inproc.h"
 
-#include "../src/utils/err.c"
+#include "testutil.h"
+#include "../src/utils/attr.h"
 #include "../src/utils/thread.c"
-#include "../src/utils/sleep.c"
 
 #if defined NN_HAVE_WINDOWS
 #include "../src/utils/win.h"
@@ -40,17 +40,13 @@
 
 int sc;
 
-void routine1 (void *arg)
+void routine1 (NN_UNUSED void *arg)
 {
-   int rc;
-
    nn_sleep (10);
-   rc = nn_send (sc, "ABC", 3, 0);
-   errno_assert (rc >= 0);
-   nn_assert (rc == 3);
+   test_send (sc, "ABC");
 }
 
-void routine2 (void *arg)
+void routine2 (NN_UNUSED void *arg)
 {
    nn_sleep (10);
    nn_term ();
@@ -129,16 +125,32 @@ int main ()
     int sb;
     char buf [3];
     struct nn_thread thread;
+    struct nn_pollfd pfd [2];
+
+    /* Test nn_poll() function. */
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, SOCKET_ADDRESS);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
+    test_send (sc, "ABC");
+    nn_sleep (100);
+    pfd [0].fd = sb;
+    pfd [0].events = NN_POLLIN | NN_POLLOUT;
+    pfd [1].fd = sc;
+    pfd [1].events = NN_POLLIN | NN_POLLOUT;
+    rc = nn_poll (pfd, 2, -1);
+    errno_assert (rc >= 0);
+    nn_assert (rc == 2);
+    nn_assert (pfd [0].revents == (NN_POLLIN | NN_POLLOUT));
+    nn_assert (pfd [1].revents == NN_POLLOUT);
+    test_close (sc);
+    test_close (sb);
 
     /*  Create a simple topology. */
-    sb = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sb != -1);
-    rc = nn_bind (sb, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
-    sc = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sc != -1);
-    rc = nn_connect (sc, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, SOCKET_ADDRESS);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
 
     /*  Check the initial state of the socket. */
     rc = getevents (sb, NN_IN | NN_OUT, 1000);
@@ -151,16 +163,12 @@ int main ()
 
     /*  Send a message and start polling. This time IN event should be
         signaled. */
-    rc = nn_send (sc, "ABC", 3, 0);
-    errno_assert (rc >= 0);
-    nn_assert (rc == 3);
+    test_send (sc, "ABC");
     rc = getevents (sb, NN_IN, 1000);
     nn_assert (rc == NN_IN);
 
     /*  Receive the message and make sure that IN is no longer signaled. */
-    rc = nn_recv (sb, buf, sizeof (buf), 0);
-    errno_assert (rc >= 0);
-    nn_assert (rc == 3);
+    test_recv (sb, "ABC");
     rc = getevents (sb, NN_IN, 10);
     nn_assert (rc == 0);
 
@@ -168,24 +176,18 @@ int main ()
     nn_thread_init (&thread, routine1, NULL);
     rc = getevents (sb, NN_IN, 1000);
     nn_assert (rc == NN_IN);
-    rc = nn_recv (sb, buf, sizeof (buf), 0);
-    errno_assert (rc >= 0);
-    nn_assert (rc == 3);
+    test_recv (sb, "ABC");
     nn_thread_term (&thread);
 
     /*  Check terminating the library from a different thread. */
     nn_thread_init (&thread, routine2, NULL);
-    rc = getevents (sb, NN_IN, 1000);
-    nn_assert (rc == NN_IN);
     rc = nn_recv (sb, buf, sizeof (buf), 0);
-    nn_assert (rc < 0 && nn_errno () == ETERM);
+    nn_assert (rc < 0 && nn_errno () == EBADF);
     nn_thread_term (&thread);
 
     /*  Clean up. */
-    rc = nn_close (sc);
-    errno_assert (rc == 0);
-    rc = nn_close (sb);
-    errno_assert (rc == 0);
+    test_close (sc);
+    test_close (sb);
 
     return 0;
 }

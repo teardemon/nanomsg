@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -24,6 +24,7 @@
 
 #include "../../utils/fast.h"
 #include "../../utils/err.h"
+#include "../../utils/attr.h"
 
 void nn_excl_init (struct nn_excl *self)
 {
@@ -51,7 +52,7 @@ int nn_excl_add (struct nn_excl *self, struct nn_pipe *pipe)
     return 0;
 }
 
-void nn_excl_rm (struct nn_excl *self, struct nn_pipe *pipe)
+void nn_excl_rm (struct nn_excl *self, NN_UNUSED struct nn_pipe *pipe)
 {
    nn_assert (self->pipe);
    self->pipe = NULL;

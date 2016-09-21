@@ -20,12 +20,18 @@ has no significance to its associated symbol; the mappings may change between
 library versions.
 
 Typically a client will iterate through the symbols until nn_symbol returns
-NULL in order to collect all the symbols.  
+NULL in order to collect all the symbols.
 
 All symbols exposed by 'nn_symbol' are available directly in the C API,
 generally as preprocessor macros.  Thus, this function is useful mostly for
 language bindings that can't parse the header file and rely on retrieving the
 symbols in the runtime.
+
+Note that the NN_MSG symbol is not exported by the _nn_symbol_ function. First,
+it is a pointer rather than an integer; second, the symbol is not supposed to
+be exported from language bindings to the user. Instead, language bindings
+should provide the zero-copy functionality in a language-specific way, if at
+all (zero-copy functionality may not make sense for some languages/bindings).
 
 
 RETURN VALUE
@@ -57,11 +63,12 @@ for (i = 0; ; ++i) {
 
 SEE ALSO
 --------
-linknanomsg:nn_errno[3]
-linknanomsg:nn_strerror[3]
-linknanomsg:nanomsg[7]
+<<nn_symbol_info.3.txt#,nn_symbol_info(3)>>
+<<nn_errno.3.txt#,nn_errno(3)>>
+<<nn_strerror.3.txt#,nn_strerror(3)>>
+<<nanomsg.7.txt#,nanomsg(7)>>
 
 
 AUTHORS
 -------
-Evan Wies <evan@neomantra.net>
+link:mailto:evan@neomantra.net[Evan Wies]

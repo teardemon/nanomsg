@@ -3,9 +3,9 @@
 
 
 Internet Engineering Task Force                          M. Sustrik, Ed.
-Internet-Draft                                            GoPivotal Inc.
-Intended status: Informational                           August 06, 2013
-Expires: February 07, 2014
+Internet-Draft
+Intended status: Informational                                March 2014
+Expires: September 2, 2014
 
 
                  TCP Mapping for Scalability Protocols
@@ -13,9 +13,9 @@ Expires: February 07, 2014
 
 Abstract
 
-   This doucment defines the TCP mapping for scalability protocols.  The
+   This document defines the TCP mapping for scalability protocols.  The
    main purpose of the mapping is to turn the stream of bytes into
-   stream of messages.  Additionaly, the mapping provides some
+   stream of messages.  Additionally, the mapping provides some
    additional checks during the connection establishment phase.
 
 Status of This Memo
@@ -33,11 +33,11 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on February 07, 2014.
+   This Internet-Draft will expire on September 2, 2014.
 
 Copyright Notice
 
-   Copyright (c) 2013 IETF Trust and the persons identified as the
+   Copyright (c) 2014 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -53,29 +53,24 @@ Copyright Notice
 
 
 
-Sustrik                 Expires February 07, 2014               [Page 1]
+Sustrik                 Expires September 2, 2014               [Page 1]
 
-Internet-Draft             TCP mapping for SPs               August 2013
+Internet-Draft             TCP mapping for SPs                March 2014
 
 
 1.  Underlying protocol
 
-   This mapping should be layered directly on the top of TCP or,
-   alternatively, on the top of ETSN (which itself is a thin layer on
-   the top of TCP).
+   This mapping should be layered directly on the top of TCP.
 
-   In the former case there's no fixed TCP port to use for the
-   communication.  Instead, port number are assigned to individual
-   services by the user.  In the latter case the communication happens
-   on the TCP port assigned to ETSN by IANA.  User identifies individual
-   services using ETSN service names.
+   There's no fixed TCP port to use for the communication.  Instead,
+   port numbers are assigned to individual services by the user.
 
 2.  Connection initiation
 
-   As soon as the underlying connection, whether TCP or ETSN, is
-   established, each party MUST send the protocol header (described in
-   detail below) immediately.  Either endpoint MUST NOW wait for the
-   protocol header from the peer before sending its own protocol header.
+   As soon as the underlying TCP connection is established, both parties
+   MUST send the protocol header (described in detail below)
+   immediately.  Both endpoints MUST then wait for the protocol header
+   from the peer before proceeding on.
 
    The goal of this design is to keep connection establishment as fast
    as possible by avoiding any additional protocol handshakes, i.e.
@@ -85,10 +80,13 @@ Internet-Draft             TCP mapping for SPs               August 2013
 
    The protocol header is 8 bytes long and looks like this:
 
-   +------+------+------+--------------+------------+----------------+
-   | 0x00 | 0x53 | 0x50 | version (8b) | type (16b) | reserved (16b) |
-   +------+------+------+--------------+------------+----------------+
-
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |      0x00     |      0x53     |      0x50     |    version    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |             type              |           reserved            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
    First four bytes of the protocol header are used to make sure that
    the peer's protocol is compatible with the protocol used by the local
@@ -99,23 +97,23 @@ Internet-Draft             TCP mapping for SPs               August 2013
    mechanism.
 
    First four bytes of the protocol header MUST be set to 0x00, 0x53,
-   0x50 and 0x01 respectively.  If the protocol header received from the
+   0x50 and 0x00 respectively.  If the protocol header received from the
    peer differs, the TCP connection MUST be closed immediately.
 
    The fact that the first byte of the protocol header is binary zero
    eliminates any text-based protocols that were accidentally connected
-   to the endpiont.  Subsequent two bytes make the check even more
+   to the endpoint.  Subsequent two bytes make the check even more
    rigorous.  At the same time they can be used as a debugging hint to
-
-
-
-Sustrik                 Expires February 07, 2014               [Page 2]
-
-Internet-Draft             TCP mapping for SPs               August 2013
-
-
    indicate that the connection is supposed to use one of the
    scalability protocols -- ASCII representation of these bytes is 'SP'
+
+
+
+Sustrik                 Expires September 2, 2014               [Page 2]
+
+Internet-Draft             TCP mapping for SPs                March 2014
+
+
    that can be easily spotted in when capturing the network traffic.
    Finally, the fourth byte rules out any incompatible versions of this
    protocol.
@@ -148,10 +146,9 @@ Internet-Draft             TCP mapping for SPs               August 2013
    | size (64b) |     payload     |
    +------------+-----------------+
 
-
    It may seem that 64 bit message size is excessive and consumes too
-   much of valueable bandwidth, especially given that most scenarios
-   call for relatively small messages, in order of bytes or kilobytes.
+   much of valuable bandwidth, especially given that most scenarios call
+   for relatively small messages, in order of bytes or kilobytes.
 
    Variable length field may seem like a better solution, however, our
    experience is that variable length size field doesn't provide any
@@ -161,19 +158,18 @@ Internet-Draft             TCP mapping for SPs               August 2013
    portion of the message and the performance impact is not even
    measurable.
 
-
-
-
-
-Sustrik                 Expires February 07, 2014               [Page 3]
-
-Internet-Draft             TCP mapping for SPs               August 2013
-
-
-   For small messages, the overal throughput is heavily CPU-bound, never
-   I/O-bound.  In other words, CPU processing associated with each
+   For small messages, the overall throughput is heavily CPU-bound,
+   never I/O-bound.  In other words, CPU processing associated with each
    individual message limits the message rate in such a way that network
    bandwidth limit is never reached.  In the future we expect it to be
+
+
+
+Sustrik                 Expires September 2, 2014               [Page 3]
+
+Internet-Draft             TCP mapping for SPs                March 2014
+
+
    even more so: network bandwidth is going to grow faster than CPU
    speed.  All in all, some performance improvement could be achieved
    using variable length size field with huge streams of very small
@@ -217,18 +213,18 @@ Internet-Draft             TCP mapping for SPs               August 2013
    streams on the top of the connection, not just the one the missing
    packets belonged to.
 
-
-
-
-
-Sustrik                 Expires February 07, 2014               [Page 4]
-
-Internet-Draft             TCP mapping for SPs               August 2013
-
-
    At the same time, implementing multiplexing is a non-trivial matter
    and results in increased development cost, more bugs and larger
    attack surface.
+
+
+
+
+
+Sustrik                 Expires September 2, 2014               [Page 4]
+
+Internet-Draft             TCP mapping for SPs                March 2014
+
 
    Finally, for multiplexing to work properly, large messages have to be
    split into smaller data chunks interleaved by chunk headers, which
@@ -244,15 +240,11 @@ Internet-Draft             TCP mapping for SPs               August 2013
    addition to what TCP does.  DoS concerns are addressed within the
    specification.
 
-7.  References
-
 Author's Address
 
    Martin Sustrik (editor)
-   GoPivotal Inc.
 
-   Email: msustrik@gopivotal.com
-
+   Email: sustrik@250bpm.com
 
 
 
@@ -277,4 +269,13 @@ Author's Address
 
 
 
-Sustrik                 Expires February 07, 2014               [Page 5]
+
+
+
+
+
+
+
+
+Sustrik                 Expires September 2, 2014               [Page 5]
+

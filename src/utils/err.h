@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -45,8 +46,23 @@
 #define nn_assert(x) \
     do {\
         if (nn_slow (!(x))) {\
+            nn_backtrace_print (); \
             fprintf (stderr, "Assertion failed: %s (%s:%d)\n", #x, \
                 __FILE__, __LINE__);\
+            fflush (stderr);\
+            nn_err_abort ();\
+        }\
+    } while (0)
+
+#define nn_assert_state(obj, state_name) \
+    do {\
+        if (nn_slow ((obj)->state != state_name)) {\
+            nn_backtrace_print (); \
+            fprintf (stderr, \
+                "Assertion failed: %d == %s (%s:%d)\n", \
+                (obj)->state, #state_name, \
+                __FILE__, __LINE__);\
+            fflush (stderr);\
             nn_err_abort ();\
         }\
     } while (0)
@@ -55,8 +71,10 @@
 #define alloc_assert(x) \
     do {\
         if (nn_slow (!x)) {\
+            nn_backtrace_print (); \
             fprintf (stderr, "Out of memory (%s:%d)\n",\
                 __FILE__, __LINE__);\
+            fflush (stderr);\
             nn_err_abort ();\
         }\
     } while (0)
@@ -65,8 +83,10 @@
 #define errno_assert(x) \
     do {\
         if (nn_slow (!(x))) {\
+            nn_backtrace_print (); \
             fprintf (stderr, "%s [%d] (%s:%d)\n", nn_err_strerror (errno),\
                 (int) errno, __FILE__, __LINE__);\
+            fflush (stderr);\
             nn_err_abort ();\
         }\
     } while (0)
@@ -75,8 +95,10 @@
 #define errnum_assert(cond, err) \
     do {\
         if (nn_slow (!(cond))) {\
+            nn_backtrace_print (); \
             fprintf (stderr, "%s [%d] (%s:%d)\n", nn_err_strerror (err),\
                 (int) (err), __FILE__, __LINE__);\
+            fflush (stderr);\
             nn_err_abort ();\
         }\
     } while (0)
@@ -86,9 +108,12 @@
     do {\
         if (nn_slow (!(x))) {\
             char errstr [256];\
-            nn_win_error ((int) GetLastError (), errstr, 256);\
+            DWORD errnum = WSAGetLastError ();\
+            nn_backtrace_print (); \
+            nn_win_error ((int) errnum, errstr, 256);\
             fprintf (stderr, "%s [%d] (%s:%d)\n",\
-                errstr, (int) GetLastError (), __FILE__, __LINE__);\
+                errstr, (int) errnum, __FILE__, __LINE__);\
+            fflush (stderr);\
             nn_err_abort ();\
         }\
     } while (0)
@@ -98,12 +123,32 @@
     do {\
         if (nn_slow (!(x))) {\
             char errstr [256];\
-            nn_win_error (WSAGetLastError (), errstr, 256);\
+            DWORD errnum = WSAGetLastError ();\
+            nn_backtrace_print (); \
+            nn_win_error (errnum, errstr, 256);\
             fprintf (stderr, "%s [%d] (%s:%d)\n",\
-                errstr, (int) WSAGetLastError (), __FILE__, __LINE__);\
+                errstr, (int) errnum, __FILE__, __LINE__);\
+            fflush (stderr);\
             nn_err_abort ();\
         }\
     } while (0)
+
+/*  Assertion-like macros for easier fsm debugging. */
+#define nn_fsm_error(message, state, src, type) \
+    do {\
+        nn_backtrace_print(); \
+        fprintf (stderr, "%s: state=%d source=%d action=%d (%s:%d)\n", \
+            message, state, src, type, __FILE__, __LINE__);\
+        fflush (stderr);\
+        nn_err_abort ();\
+    } while (0)
+
+#define nn_fsm_bad_action(state, src, type) nn_fsm_error(\
+    "Unexpected action", state, src, type)
+#define nn_fsm_bad_state(state, src, type) nn_fsm_error(\
+    "Unexpected state", state, src, type)
+#define nn_fsm_bad_source(state, src, type) nn_fsm_error(\
+    "Unexpected source", state, src, type)
 
 /*  Compile-time assert. */
 #define CT_ASSERT_HELPER2(prefix, line) prefix##line
@@ -119,6 +164,7 @@
 NN_NORETURN void nn_err_abort (void);
 int nn_err_errno (void);
 const char *nn_err_strerror (int errnum);
+void nn_backtrace_print (void);
 
 #ifdef NN_HAVE_WINDOWS
 int nn_err_wsa_to_posix (int wsaerr);
@@ -126,4 +172,3 @@ void nn_win_error (int err, char *buf, size_t bufsize);
 #endif
 
 #endif
-

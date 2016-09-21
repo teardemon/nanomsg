@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -29,6 +30,8 @@
 #include "../../aio/fsm.h"
 #include "../../aio/usock.h"
 
+#include "../utils/backoff.h"
+
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
@@ -36,7 +39,6 @@
 #include "../../utils/fast.h"
 
 #include <string.h>
-#include <stdint.h>
 
 #if defined NN_HAVE_WINDOWS
 #include "../../utils/win.h"
@@ -45,7 +47,7 @@
 #include <netinet/in.h>
 #endif
 
-/*  The backlog is set relatively high so that there are not to many failed
+/*  The backlog is set relatively high so that there are not too many failed
     connection attemps during re-connection storms. */
 #define NN_BTCP_BACKLOG 100
 
@@ -89,7 +91,9 @@ const struct nn_epbase_vfptr nn_btcp_epbase_vfptr = {
 /*  Private functions. */
 static void nn_btcp_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
-static void nn_btcp_start_listening (struct nn_btcp *self);
+static void nn_btcp_shutdown (struct nn_fsm *self, int src, int type,
+    void *srcptr);
+static int nn_btcp_listen (struct nn_btcp *self);
 static void nn_btcp_start_accepting (struct nn_btcp *self);
 
 int nn_btcp_create (void *hint, struct nn_epbase **epbase)
@@ -97,10 +101,8 @@ int nn_btcp_create (void *hint, struct nn_epbase **epbase)
     int rc;
     struct nn_btcp *self;
     const char *addr;
-    size_t addrlen;
     const char *end;
     const char *pos;
-    int port;
     struct sockaddr_storage ss;
     size_t sslen;
     int ipv4only;
@@ -113,7 +115,6 @@ int nn_btcp_create (void *hint, struct nn_epbase **epbase)
     /*  Initalise the epbase. */
     nn_epbase_init (&self->epbase, &nn_btcp_epbase_vfptr, hint);
     addr = nn_epbase_getaddr (&self->epbase);
-    addrlen = strlen (addr);
 
     /*  Parse the port. */
     end = addr + strlen (addr);
@@ -128,7 +129,6 @@ int nn_btcp_create (void *hint, struct nn_epbase **epbase)
         nn_epbase_term (&self->epbase);
         return -EINVAL;
     }
-    port = rc;
 
     /*  Check whether IPv6 is to be used. */
     ipv4onlylen = sizeof (ipv4only);
@@ -144,15 +144,22 @@ int nn_btcp_create (void *hint, struct nn_epbase **epbase)
     }
 
     /*  Initialise the structure. */
-    nn_fsm_init_root (&self->fsm, nn_btcp_handler,
+    nn_fsm_init_root (&self->fsm, nn_btcp_handler, nn_btcp_shutdown,
         nn_epbase_getctx (&self->epbase));
     self->state = NN_BTCP_STATE_IDLE;
-    nn_usock_init (&self->usock, NN_BTCP_SRC_USOCK, &self->fsm);
     self->atcp = NULL;
     nn_list_init (&self->atcps);
 
     /*  Start the state machine. */
     nn_fsm_start (&self->fsm);
+
+    nn_usock_init (&self->usock, NN_BTCP_SRC_USOCK, &self->fsm);
+
+    rc = nn_btcp_listen (self);
+    if (rc != 0) {
+        nn_epbase_term (&self->epbase);
+        return rc;
+    }
 
     /*  Return the base class as an out parameter. */
     *epbase = &self->epbase;
@@ -175,7 +182,7 @@ static void nn_btcp_destroy (struct nn_epbase *self)
 
     btcp = nn_cont (self, struct nn_btcp, epbase);
 
-    nn_assert (btcp->state == NN_BTCP_STATE_IDLE);
+    nn_assert_state (btcp, NN_BTCP_STATE_IDLE);
     nn_list_term (&btcp->atcps);
     nn_assert (btcp->atcp == NULL);
     nn_usock_term (&btcp->usock);
@@ -185,7 +192,7 @@ static void nn_btcp_destroy (struct nn_epbase *self)
     nn_free (btcp);
 }
 
-static void nn_btcp_handler (struct nn_fsm *self, int src, int type,
+static void nn_btcp_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
     struct nn_btcp *btcp;
@@ -194,12 +201,14 @@ static void nn_btcp_handler (struct nn_fsm *self, int src, int type,
 
     btcp = nn_cont (self, struct nn_btcp, fsm);
 
-/******************************************************************************/
-/*  STOP procedure.                                                           */
-/******************************************************************************/
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
-        nn_atcp_stop (btcp->atcp);
-        btcp->state = NN_BTCP_STATE_STOPPING_ATCP;
+        if (btcp->atcp) {
+            nn_atcp_stop (btcp->atcp);
+            btcp->state = NN_BTCP_STATE_STOPPING_ATCP;
+        }
+        else {
+            btcp->state = NN_BTCP_STATE_STOPPING_USOCK;
+        }
     }
     if (nn_slow (btcp->state == NN_BTCP_STATE_STOPPING_ATCP)) {
         if (!nn_atcp_isidle (btcp->atcp))
@@ -228,7 +237,7 @@ static void nn_btcp_handler (struct nn_fsm *self, int src, int type,
         nn_list_erase (&btcp->atcps, &atcp->item);
         nn_atcp_term (atcp);
         nn_free (atcp);
-        
+
         /*  If there are no more atcp state machines, we can stop the whole
             btcp object. */
 atcps_stopping:
@@ -242,59 +251,50 @@ atcps_stopping:
         return;
     }
 
+    nn_fsm_bad_action(btcp->state, src, type);
+}
+
+static void nn_btcp_handler (struct nn_fsm *self, int src, int type,
+    void *srcptr)
+{
+    struct nn_btcp *btcp;
+    struct nn_atcp *atcp;
+
+    btcp = nn_cont (self, struct nn_btcp, fsm);
+
     switch (btcp->state) {
 
 /******************************************************************************/
 /*  IDLE state.                                                               */
 /******************************************************************************/
     case NN_BTCP_STATE_IDLE:
-        switch (src) {
-
-        case NN_FSM_ACTION:
-            switch (type) {
-            case NN_FSM_START:
-                nn_btcp_start_listening (btcp);
-                nn_btcp_start_accepting (btcp);
-                btcp->state = NN_BTCP_STATE_ACTIVE;
-                return;
-            default:
-                nn_assert (0);
-            }
-
-        default:
-            nn_assert (0);
-        }
+        nn_assert (src == NN_FSM_ACTION);
+        nn_assert (type == NN_FSM_START);
+        btcp->state = NN_BTCP_STATE_ACTIVE;
+        return;
 
 /******************************************************************************/
 /*  ACTIVE state.                                                             */
 /*  The execution is yielded to the atcp state machine in this state.         */
 /******************************************************************************/
     case NN_BTCP_STATE_ACTIVE:
-        if (srcptr == btcp->atcp) {
-            switch (type) {
-            case NN_ATCP_ACCEPTED:
-
-                /*  Move the newly created connection to the list of existing
-                    connections. */
-                nn_list_insert (&btcp->atcps, &btcp->atcp->item,
-                    nn_list_end (&btcp->atcps));
-                btcp->atcp = NULL;
-
-                /*  Start waiting for a new incoming connection. */
-                nn_btcp_start_accepting (btcp);
-
-                return;
-
-            default:
-                nn_assert (0);
-            }
+        if (src == NN_BTCP_SRC_USOCK) {
+            /*  usock object cleaning up */
+            nn_assert (type == NN_USOCK_SHUTDOWN || type == NN_USOCK_STOPPED);
+            return;
         }
 
-        /*  For all remaining events we'll assume they are coming from one
-            of remaining child atcp objects. */
+        /*  All other events come from child atcp objects. */
         nn_assert (src == NN_BTCP_SRC_ATCP);
         atcp = (struct nn_atcp*) srcptr;
         switch (type) {
+        case NN_ATCP_ACCEPTED:
+            nn_assert (btcp->atcp == atcp) ;
+            nn_list_insert (&btcp->atcps, &atcp->item,
+                nn_list_end (&btcp->atcps));
+            btcp->atcp = NULL;
+            nn_btcp_start_accepting (btcp);
+            return;
         case NN_ATCP_ERROR:
             nn_atcp_stop (atcp);
             return;
@@ -304,22 +304,18 @@ atcps_stopping:
             nn_free (atcp);
             return;
         default:
-            nn_assert (0);
+            nn_fsm_bad_action (btcp->state, src, type);
         }
 
 /******************************************************************************/
 /*  Invalid state.                                                            */
 /******************************************************************************/
     default:
-        nn_assert (0);
+        nn_fsm_bad_state (btcp->state, src, type);
     }
 }
 
-/******************************************************************************/
-/*  State machine actions.                                                    */
-/******************************************************************************/
-
-static void nn_btcp_start_listening (struct nn_btcp *self)
+static int nn_btcp_listen (struct nn_btcp *self)
 {
     int rc;
     struct sockaddr_storage ss;
@@ -338,11 +334,14 @@ static void nn_btcp_start_listening (struct nn_btcp *self)
     /*  Parse the port. */
     end = addr + strlen (addr);
     pos = strrchr (addr, ':');
-    nn_assert (pos);
+    if (pos == NULL) {
+        return -EINVAL;
+    }
     ++pos;
     rc = nn_port_resolve (pos, end - pos);
-    nn_assert (rc >= 0);
-    port = rc;
+    if (rc <= 0)
+        return rc;
+    port = (uint16_t) rc;
 
     /*  Parse the address. */
     ipv4onlylen = sizeof (ipv4only);
@@ -350,29 +349,49 @@ static void nn_btcp_start_listening (struct nn_btcp *self)
         &ipv4only, &ipv4onlylen);
     nn_assert (ipv4onlylen == sizeof (ipv4only));
     rc = nn_iface_resolve (addr, pos - addr - 1, ipv4only, &ss, &sslen);
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+        return rc;
+    }
 
     /*  Combine the port and the address. */
-    if (ss.ss_family == AF_INET) {
+    switch (ss.ss_family) {
+    case AF_INET:
         ((struct sockaddr_in*) &ss)->sin_port = htons (port);
         sslen = sizeof (struct sockaddr_in);
-    }
-    else if (ss.ss_family == AF_INET6) {
+        break;
+    case AF_INET6:
         ((struct sockaddr_in6*) &ss)->sin6_port = htons (port);
         sslen = sizeof (struct sockaddr_in6);
-    }
-    else
+        break;
+    default:
         nn_assert (0);
+    }
 
     /*  Start listening for incoming connections. */
     rc = nn_usock_start (&self->usock, ss.ss_family, SOCK_STREAM, 0);
-    /*  TODO: EMFILE error can happen here. We can wait a bit and re-try. */
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+        return rc;
+    }
+
     rc = nn_usock_bind (&self->usock, (struct sockaddr*) &ss, (size_t) sslen);
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+       nn_usock_stop (&self->usock);
+       return rc;
+    }
+
     rc = nn_usock_listen (&self->usock, NN_BTCP_BACKLOG);
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+        nn_usock_stop (&self->usock);
+        return rc;
+    }
+    nn_btcp_start_accepting(self);
+
+    return 0;
 }
+
+/******************************************************************************/
+/*  State machine actions.                                                    */
+/******************************************************************************/
 
 static void nn_btcp_start_accepting (struct nn_btcp *self)
 {
@@ -386,4 +405,3 @@ static void nn_btcp_start_accepting (struct nn_btcp *self)
     /*  Start waiting for a new incoming connection. */
     nn_atcp_start (self->atcp, &self->usock);
 }
-

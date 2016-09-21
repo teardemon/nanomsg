@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2014 Martin Sustrik  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -32,6 +33,7 @@
 #include "../../utils/random.h"
 #include "../../utils/wire.h"
 #include "../../utils/list.h"
+#include "../../utils/attr.h"
 
 #include <string.h>
 
@@ -86,8 +88,15 @@ int nn_xrep_add (struct nn_sockbase *self, struct nn_pipe *pipe)
 {
     struct nn_xrep *xrep;
     struct nn_xrep_data *data;
+    int rcvprio;
+    size_t sz;
 
     xrep = nn_cont (self, struct nn_xrep, sockbase);
+
+    sz = sizeof (rcvprio);
+    nn_pipe_getopt (pipe, NN_SOL_SOCKET, NN_RCVPRIO, &rcvprio, &sz);
+    nn_assert (sz == sizeof (rcvprio));
+    nn_assert (rcvprio >= 1 && rcvprio <= 16);
 
     data = nn_alloc (sizeof (struct nn_xrep_data), "pipe data (xrep)");
     alloc_assert (data);
@@ -97,8 +106,7 @@ int nn_xrep_add (struct nn_sockbase *self, struct nn_pipe *pipe)
     nn_hash_insert (&xrep->outpipes, xrep->next_key & 0x7fffffff,
         &data->outitem);
     ++xrep->next_key;
-    nn_fq_add (&xrep->inpipes, pipe, &data->initem, 8);
-
+    nn_fq_add (&xrep->inpipes, &data->initem, pipe, rcvprio);
     nn_pipe_setdata (pipe, data);
 
     return 0;
@@ -112,7 +120,7 @@ void nn_xrep_rm (struct nn_sockbase *self, struct nn_pipe *pipe)
     xrep = nn_cont (self, struct nn_xrep, sockbase);
     data = nn_pipe_getdata (pipe);
 
-    nn_fq_rm (&xrep->inpipes, pipe, &data->initem);
+    nn_fq_rm (&xrep->inpipes, &data->initem);
     nn_hash_erase (&xrep->outpipes, &data->outitem);
     nn_hash_item_term (&data->outitem);
 
@@ -126,11 +134,11 @@ void nn_xrep_in (struct nn_sockbase *self, struct nn_pipe *pipe)
 
     xrep = nn_cont (self, struct nn_xrep, sockbase);
     data = nn_pipe_getdata (pipe);
-    
-    nn_fq_in (&xrep->inpipes, pipe, &data->initem);
+
+    nn_fq_in (&xrep->inpipes, &data->initem);
 }
 
-void nn_xrep_out (struct nn_sockbase *self, struct nn_pipe *pipe)
+void nn_xrep_out (NN_UNUSED struct nn_sockbase *self, struct nn_pipe *pipe)
 {
     struct nn_xrep_data *data;
 
@@ -154,21 +162,23 @@ int nn_xrep_send (struct nn_sockbase *self, struct nn_msg *msg)
     xrep = nn_cont (self, struct nn_xrep, sockbase);
 
     /*  We treat invalid peer ID as if the peer was non-existent. */
-    if (nn_slow (nn_chunkref_size (&msg->hdr) < sizeof (uint32_t))) {
+    if (nn_slow (nn_chunkref_size (&msg->sphdr) < sizeof (uint32_t))) {
         nn_msg_term (msg);
         return 0;
     }
 
     /*  Retrieve the destination peer ID. Trim it from the header. */
-    key = nn_getl (nn_chunkref_data (&msg->hdr));
-    nn_chunkref_trim (&msg->hdr, 4);
+    key = nn_getl (nn_chunkref_data (&msg->sphdr));
+    nn_chunkref_trim (&msg->sphdr, 4);
 
     /*  Find the appropriate pipe to send the message to. If there's none,
         or if it's not ready for sending, silently drop the message. */
     data = nn_cont (nn_hash_get (&xrep->outpipes, key), struct nn_xrep_data,
         outitem);
-    if (!data || !(data->flags & NN_XREP_OUT))
+    if (!data || !(data->flags & NN_XREP_OUT)) {
+        nn_msg_term (msg);
         return 0;
+    }
 
     /*  Send the message. */
     rc = nn_pipe_send (data->pipe, msg);
@@ -185,6 +195,7 @@ int nn_xrep_recv (struct nn_sockbase *self, struct nn_msg *msg)
     struct nn_xrep *xrep;
     struct nn_pipe *pipe;
     int i;
+    int maxttl;
     void *data;
     size_t sz;
     struct nn_chunkref ref;
@@ -197,6 +208,10 @@ int nn_xrep_recv (struct nn_sockbase *self, struct nn_msg *msg)
         return rc;
 
     if (!(rc & NN_PIPE_PARSED)) {
+
+        sz = sizeof (maxttl);
+        rc = nn_sockbase_getopt (self, NN_MAXTTL, &maxttl, &sz);
+        errnum_assert (rc == 0, -rc);
 
         /*  Determine the size of the message header. */
         data = nn_chunkref_data (&msg->body);
@@ -218,34 +233,43 @@ int nn_xrep_recv (struct nn_sockbase *self, struct nn_msg *msg)
         }
         ++i;
 
+        /* If we encountered too many hops, just toss the message */
+        if (i > maxttl) {
+            nn_msg_term (msg);
+            return -EAGAIN;
+        }
+
         /*  Split the header and the body. */
-        nn_assert (nn_chunkref_size (&msg->hdr) == 0);
-        nn_chunkref_term (&msg->hdr);
-        nn_chunkref_init (&msg->hdr, i * sizeof (uint32_t));
-        memcpy (nn_chunkref_data (&msg->hdr), data, i * sizeof (uint32_t));
+        nn_assert (nn_chunkref_size (&msg->sphdr) == 0);
+        nn_chunkref_term (&msg->sphdr);
+        nn_chunkref_init (&msg->sphdr, i * sizeof (uint32_t));
+        memcpy (nn_chunkref_data (&msg->sphdr), data, i * sizeof (uint32_t));
         nn_chunkref_trim (&msg->body, i * sizeof (uint32_t));
     }
 
     /*  Prepend the header by the pipe key. */
     pipedata = nn_pipe_getdata (pipe);
-    nn_chunkref_init (&ref, nn_chunkref_size (&msg->hdr) + sizeof (uint32_t));
+    nn_chunkref_init (&ref,
+        nn_chunkref_size (&msg->sphdr) + sizeof (uint32_t));
     nn_putl (nn_chunkref_data (&ref), pipedata->outitem.key);
     memcpy (((uint8_t*) nn_chunkref_data (&ref)) + sizeof (uint32_t),
-        nn_chunkref_data (&msg->hdr), nn_chunkref_size (&msg->hdr));
-    nn_chunkref_term (&msg->hdr);
-    nn_chunkref_mv (&msg->hdr, &ref);
+        nn_chunkref_data (&msg->sphdr), nn_chunkref_size (&msg->sphdr));
+    nn_chunkref_term (&msg->sphdr);
+    nn_chunkref_mv (&msg->sphdr, &ref);
 
     return 0;
 }
 
-int nn_xrep_setopt (struct nn_sockbase *self, int level, int option,
-    const void *optval, size_t optvallen)
+int nn_xrep_setopt (NN_UNUSED struct nn_sockbase *self,
+    NN_UNUSED int level, NN_UNUSED int option,
+    NN_UNUSED const void *optval, NN_UNUSED size_t optvallen)
 {
     return -ENOPROTOOPT;
 }
 
-int nn_xrep_getopt (struct nn_sockbase *self, int level, int option,
-    void *optval, size_t *optvallen)
+int nn_xrep_getopt (NN_UNUSED struct nn_sockbase *self,
+    NN_UNUSED int level, NN_UNUSED int option,
+    NN_UNUSED void *optval, NN_UNUSED size_t *optvallen)
 {
     return -ENOPROTOOPT;
 }

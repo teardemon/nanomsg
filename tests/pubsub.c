@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,56 +23,65 @@
 #include "../src/nn.h"
 #include "../src/pubsub.h"
 
-#include "../src/utils/err.c"
-#include "../src/utils/sleep.c"
+#include "testutil.h"
 
 #define SOCKET_ADDRESS "inproc://a"
 
 int main ()
 {
     int rc;
-    int pub;
+    int pub1;
+    int pub2;
     int sub1;
     int sub2;
-    char buf [3];
+    char buf [8];
+    size_t sz;
 
-    pub = nn_socket (AF_SP, NN_PUB);
-    errno_assert (pub != -1);
-    rc = nn_bind (pub, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
-    sub1 = nn_socket (AF_SP, NN_SUB);
-    errno_assert (sub1 != -1);
+    pub1 = test_socket (AF_SP, NN_PUB);
+    test_bind (pub1, SOCKET_ADDRESS);
+    sub1 = test_socket (AF_SP, NN_SUB);
     rc = nn_setsockopt (sub1, NN_SUB, NN_SUB_SUBSCRIBE, "", 0);
     errno_assert (rc == 0);
-    rc = nn_connect (sub1, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
-    sub2 = nn_socket (AF_SP, NN_SUB);
-    errno_assert (sub2 != -1);
+    sz = sizeof (buf);
+    rc = nn_getsockopt (sub1, NN_SUB, NN_SUB_SUBSCRIBE, buf, &sz);
+    nn_assert (rc == -1 && nn_errno () == ENOPROTOOPT);
+    test_connect (sub1, SOCKET_ADDRESS);
+    sub2 = test_socket (AF_SP, NN_SUB);
     rc = nn_setsockopt (sub2, NN_SUB, NN_SUB_SUBSCRIBE, "", 0);
     errno_assert (rc == 0);
-    rc = nn_connect (sub2, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
+    test_connect (sub2, SOCKET_ADDRESS);
 
     /*  Wait till connections are established to prevent message loss. */
     nn_sleep (10);
 
-    rc = nn_send (pub, "0123456789012345678901234567890123456789", 40, 0);
-    errno_assert (rc >= 0);
-    nn_assert (rc == 40);
+    test_send (pub1, "0123456789012345678901234567890123456789");
+    test_recv (sub1, "0123456789012345678901234567890123456789");
+    test_recv (sub2, "0123456789012345678901234567890123456789");
 
-    rc = nn_recv (sub1, buf, sizeof (buf), 0);
-    errno_assert (rc >= 0);
-    nn_assert (rc == 40);
-    rc = nn_recv (sub2, buf, sizeof (buf), 0);
-    errno_assert (rc >= 0);
-    nn_assert (rc == 40);
+    test_close (pub1);
+    test_close (sub1);
+    test_close (sub2);
 
-    rc = nn_close (pub);
+    /*  Check receiving messages from two publishers. */
+
+    sub1 = test_socket (AF_SP, NN_SUB);
+    rc = nn_setsockopt (sub1, NN_SUB, NN_SUB_SUBSCRIBE, "", 0);
     errno_assert (rc == 0);
-    rc = nn_close (sub1);
-    errno_assert (rc == 0);    
-    rc = nn_close (sub2);
-    errno_assert (rc == 0);
+    test_bind (sub1, SOCKET_ADDRESS);
+    pub1 = test_socket (AF_SP, NN_PUB);
+    test_connect (pub1, SOCKET_ADDRESS);
+    pub2 = test_socket (AF_SP, NN_PUB);
+    test_connect (pub2, SOCKET_ADDRESS);
+    nn_sleep (100);
+
+    test_send (pub1, "0123456789012345678901234567890123456789");
+    test_send (pub2, "0123456789012345678901234567890123456789");
+    test_recv (sub1, "0123456789012345678901234567890123456789");
+    test_recv (sub1, "0123456789012345678901234567890123456789");
+
+    test_close (pub2);
+    test_close (pub1);
+    test_close (sub1);
 
     return 0;
 }

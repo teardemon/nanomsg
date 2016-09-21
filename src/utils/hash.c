@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -52,15 +52,46 @@ void nn_hash_term (struct nn_hash *self)
     nn_free (self->array);
 }
 
-void nn_hash_insert (struct nn_hash *self, uint32_t key,
-    struct nn_hash_item *item)
-{
-    struct nn_list_item *it;
+static void nn_hash_rehash (struct nn_hash *self) {
     uint32_t i;
     uint32_t oldslots;
     struct nn_list *oldarray;
     struct nn_hash_item *hitm;
     uint32_t newslot;
+
+    /*  Allocate new double-sized array of slots. */
+    oldslots = self->slots;
+    oldarray = self->array;
+    self->slots *= 2;
+    self->array = nn_alloc (sizeof (struct nn_list) * self->slots, "hash map");
+    alloc_assert (self->array);
+    for (i = 0; i != self->slots; ++i)
+    nn_list_init (&self->array [i]);
+
+    /*  Move the items from old slot array to new slot array. */
+    for (i = 0; i != oldslots; ++i) {
+    while (!nn_list_empty (&oldarray [i])) {
+        hitm = nn_cont (nn_list_begin (&oldarray [i]),
+                struct nn_hash_item, list);
+        nn_list_erase (&oldarray [i], &hitm->list);
+        newslot = nn_hash_key (hitm->key) % self->slots;
+        nn_list_insert (&self->array [newslot], &hitm->list,
+                nn_list_end (&self->array [newslot]));
+    }
+
+    nn_list_term (&oldarray [i]);
+    }
+
+    /*  Deallocate the old array of slots. */
+    nn_free (oldarray);
+}
+
+
+void nn_hash_insert (struct nn_hash *self, uint32_t key,
+    struct nn_hash_item *item)
+{
+    struct nn_list_item *it;
+    uint32_t i;
 
     i = nn_hash_key (key) % self->slots;
 
@@ -76,35 +107,8 @@ void nn_hash_insert (struct nn_hash *self, uint32_t key,
 
     /*  If the hash is getting full, double the amount of slots and
         re-hash all the items. */
-    if (nn_slow (self->items * 2 > self->slots && self->slots < 0x80000000)) {
-
-        /*  Allocate new double-sized array of slots. */
-        oldslots = self->slots;
-        oldarray = self->array;
-        self->slots *= 2;
-        self->array = nn_alloc (sizeof (struct nn_list) * self->slots,
-            "hash map");
-        alloc_assert (self->array);
-        for (i = 0; i != self->slots; ++i)
-            nn_list_init (&self->array [i]);
-
-        /*  Move the items from old slot array to new slot array. */
-        for (i = 0; i != oldslots; ++i) {
-            while (!nn_list_empty (&oldarray [i])) {
-                hitm = nn_cont (nn_list_begin (&oldarray [i]),
-                     struct nn_hash_item, list);
-                nn_list_erase (&oldarray [i], &hitm->list);
-                newslot = nn_hash_key (hitm->key) % self->slots;
-                nn_list_insert (&self->array [newslot], &hitm->list,
-                    nn_list_end (&self->array [newslot]));
-            }
-
-            nn_list_term (&oldarray [i]);
-        }
-
-        /*  Deallocate the old array of slots. */
-        nn_free (oldarray);
-    }
+    if (nn_slow (self->items * 2 > self->slots && self->slots < 0x80000000))
+    nn_hash_rehash(self);
 }
 
 void nn_hash_erase (struct nn_hash *self, struct nn_hash_item *item)
@@ -113,6 +117,7 @@ void nn_hash_erase (struct nn_hash *self, struct nn_hash_item *item)
 
     slot = nn_hash_key (item->key) % self->slots;
     nn_list_erase (&self->array [slot], &item->list);
+	--self->items;
 }
 
 struct nn_hash_item *nn_hash_get (struct nn_hash *self, uint32_t key)

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -27,6 +27,7 @@
 #include "../utils/thread.h"
 
 struct nn_worker_task {
+    int src;
     struct nn_fsm *owner;
 };
 
@@ -34,6 +35,7 @@ struct nn_worker_task {
 #define NN_WORKER_OP_ERROR 2
 
 struct nn_worker_op {
+    int src;
     struct nn_fsm *owner;
     int state;
 
@@ -42,7 +44,8 @@ struct nn_worker_op {
     OVERLAPPED olpd;
 };
 
-void nn_worker_op_init (struct nn_worker_op *self, struct nn_fsm *owner);
+void nn_worker_op_init (struct nn_worker_op *self, int src,
+    struct nn_fsm *owner);
 void nn_worker_op_term (struct nn_worker_op *self);
 
 /*  Call this function when asynchronous operation is started.

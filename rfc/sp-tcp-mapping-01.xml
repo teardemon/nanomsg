@@ -11,13 +11,12 @@
 
     <author fullname="Martin Sustrik" initials="M." role="editor"
             surname="Sustrik">
-      <organization>GoPivotal Inc.</organization>
       <address>
-        <email>msustrik@gopivotal.com</email>
+        <email>sustrik@250bpm.com</email>
       </address>
     </author>
 
-    <date month="August" year="2013" />
+    <date month="March" year="2014" />
 
     <area>Applications</area>
     <workgroup>Internet Engineering Task Force</workgroup>
@@ -28,7 +27,7 @@
     <abstract>
       <t>This document defines the TCP mapping for scalability protocols.
          The main purpose of the mapping is to turn the stream of bytes
-         into stream of messages. Additionaly, the mapping provides some
+         into stream of messages. Additionally, the mapping provides some
          additional checks during the connection establishment phase.</t>
     </abstract>
 
@@ -38,25 +37,19 @@
 
     <section title = "Underlying protocol">
 
-      <t>This mapping should be layered directly on the top of TCP or,
-         alternatively, on the top of ETSN (which itself is a thin layer
-         on the top of TCP).</t>
+      <t>This mapping should be layered directly on the top of TCP.</t>
 
-      <t>In the former case there's no fixed TCP port to use for the
-         communication. Instead, port number are assigned to individual
-         services by the user. In the latter case the communication happens
-         on the TCP port assigned to ETSN by IANA. User identifies individual
-         services using ETSN service names.</t>
+      <t>There's no fixed TCP port to use for the communication. Instead, port
+         numbers are assigned to individual services by the user.</t>
 
     </section>
 
     <section title = "Connection initiation">
 
-      <t>As soon as the underlying connection, whether TCP or ETSN, is
-         established, each party MUST send the protocol header (described
-         in detail below) immediately. Either endpoint MUST NOW wait for the
-         protocol header from the peer before sending its own protocol
-         header.</t>
+      <t>As soon as the underlying TCP connection is established, both parties
+         MUST send the protocol header (described in detail below) immediately.
+         Both endpoints MUST then wait for the protocol header from the peer
+         before proceeding on.</t>
 
       <t>The goal of this design is to keep connection establishment as
          fast as possible by avoiding any additional protocol handshakes,
@@ -68,9 +61,13 @@
 
       <figure>
         <artwork>
-+------+------+------+--------------+------------+----------------+
-| 0x00 | 0x53 | 0x50 | version (8b) | type (16b) | reserved (16b) |
-+------+------+------+--------------+------------+----------------+
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|      0x00     |      0x53     |      0x50     |    version    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|             type              |           reserved            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
         </artwork>
       </figure>
 
@@ -82,12 +79,12 @@
          -- does not apply. We have to use an alternative mechanism.</t>
 
       <t>First four bytes of the protocol header MUST be set to 0x00, 0x53, 0x50
-         and 0x01 respectively. If the protocol header received from the peer
+         and 0x00 respectively. If the protocol header received from the peer
          differs, the TCP connection MUST be closed immediately.</t>
 
       <t>The fact that the first byte of the protocol header is binary zero
          eliminates any text-based protocols that were accidentally connected
-         to the endpiont. Subsequent two bytes make the check even more
+         to the endpoint. Subsequent two bytes make the check even more
          rigorous. At the same time they can be used as a debugging hint to
          indicate that the connection is supposed to use one of the scalability
          protocols -- ASCII representation of these bytes is 'SP' that can
@@ -130,7 +127,7 @@
       </figure>
 
       <t>It may seem that 64 bit message size is excessive and consumes too much
-         of valueable bandwidth, especially given that most scenarios call for
+         of valuable bandwidth, especially given that most scenarios call for
          relatively small messages, in order of bytes or kilobytes.</t>
 
       <t>Variable length field may seem like a better solution, however, our
@@ -140,7 +137,7 @@
       <t>For large messages, 64 bits used by the field form a negligible portion
          of the message and the performance impact is not even measurable.</t>
 
-      <t>For small messages, the overal throughput is heavily CPU-bound, never
+      <t>For small messages, the overall throughput is heavily CPU-bound, never
          I/O-bound. In other words, CPU processing associated with each
          individual message limits the message rate in such a way that network
          bandwidth limit is never reached. In the future we expect it to be

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -44,6 +44,8 @@ void nn_xreq_in (struct nn_sockbase *self, struct nn_pipe *pipe);
 void nn_xreq_out (struct nn_sockbase *self, struct nn_pipe *pipe);
 int nn_xreq_events (struct nn_sockbase *self);
 int nn_xreq_send (struct nn_sockbase *self, struct nn_msg *msg);
+int nn_xreq_send_to (struct nn_sockbase *self, struct nn_msg *msg,
+    struct nn_pipe **to);
 int nn_xreq_recv (struct nn_sockbase *self, struct nn_msg *msg);
 int nn_xreq_setopt (struct nn_sockbase *self, int level, int option,
     const void *optval, size_t optvallen);

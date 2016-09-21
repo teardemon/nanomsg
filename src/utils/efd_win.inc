@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
+    Copyright 2015 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -21,6 +22,7 @@
 */
 
 #define NN_EFD_PORT 5907
+#define NN_EFD_RETRIES 1000
 
 #include "err.h"
 #include "fast.h"
@@ -42,6 +44,7 @@ int nn_efd_init (struct nn_efd *self)
     BOOL reuseaddr;
     BOOL nodelay;
     u_long nonblock;
+    int i;
 
     /*  Make the following critical section accessible to everyone. */
     sa.nLength = sizeof (sa);
@@ -54,15 +57,24 @@ int nn_efd_init (struct nn_efd *self)
 
     /*  This function has to be enclosed in a system-wide critical section
         so that two instances of the library don't accidentally create an efd
-        crossing the process boundary. 
-        CAUTION: This critical section has machine-wide scope. Thus, it must
-        be properly exited even before crashing the process by an assertion. */
-    sync = CreateEvent (&sa, FALSE, TRUE, "Global\\nanomsg-port-sync");
+        crossing the process boundary. */
+    sync = CreateMutex (&sa, FALSE, "Global\\nanomsg-port-mutex");
     win_assert (sync != NULL);
 
-    /*  Enter the critical section. */
-    dwrc = WaitForSingleObject (sync, INFINITE);
-    nn_assert (dwrc == WAIT_OBJECT_0);
+    /*  Enter the critical section.   If we cannot get the object in 10 seconds
+        then something is seriously wrong.  Just bail. */
+    dwrc = WaitForSingleObject (sync, 10000);
+    switch (dwrc) {
+    case WAIT_ABANDONED:
+    case WAIT_OBJECT_0:
+        break;
+    case WAIT_TIMEOUT:
+        rc = ETIMEDOUT;
+        goto wsafail3;
+    default:
+        rc = nn_err_wsa_to_posix (WSAGetLastError ());
+        goto wsafail3;
+    }
 
     /*  Unfortunately, on Windows the only way to send signal to a file
         descriptor (SOCKET) is to create a full-blown TCP connecting on top of
@@ -101,34 +113,51 @@ int nn_efd_init (struct nn_efd *self)
     if (nn_slow (rc == SOCKET_ERROR))
         goto wsafail;
 
-    /*  Create the writer socket. */
-    self->w = socket (AF_INET, SOCK_STREAM, 0);
-    if (nn_slow (listener == SOCKET_ERROR))
-        goto wsafail;
-    brc = SetHandleInformation ((HANDLE) self->w, HANDLE_FLAG_INHERIT, 0);
-    win_assert (brc);
+    /*  The following code is in the loop, because windows sometimes delays
+        WSAEADDRINUSE error to the `connect` call. But retrying the connection
+        works like a charm. Still we want to limit number of retries  */
+    for(i = 0; i < NN_EFD_RETRIES; ++i) {
 
-    /*  Set TCP_NODELAY on the writer socket to make efd as fast as possible.
-        There's only one byte going to be written, so batching would not make
-        sense anyway. */
-    nodelay = 1;
-    rc = setsockopt (self->w, IPPROTO_TCP, TCP_NODELAY, (char*) &nodelay,
-        sizeof (nodelay));
-    if (nn_slow (rc == SOCKET_ERROR))
-        goto wsafail;
+        /*  Create the writer socket. */
+        self->w = socket (AF_INET, SOCK_STREAM, 0);
+        if (nn_slow (listener == SOCKET_ERROR))
+            goto wsafail;
+        brc = SetHandleInformation ((HANDLE) self->w, HANDLE_FLAG_INHERIT, 0);
+        win_assert (brc);
 
-    /*  Connect the writer socket to the listener socket. */
-    rc = connect (self->w, (struct sockaddr*) &addr, sizeof (addr));
-    if (nn_slow (rc == SOCKET_ERROR))
-        goto wsafail;
+        /*  Set TCP_NODELAY on the writer socket to make efd as fast as possible.
+            There's only one byte going to be written, so batching would not make
+            sense anyway. */
+        nodelay = 1;
+        rc = setsockopt (self->w, IPPROTO_TCP, TCP_NODELAY, (char*) &nodelay,
+            sizeof (nodelay));
+        if (nn_slow (rc == SOCKET_ERROR))
+            goto wsafail;
 
-    while (1) {
+        /*  Connect the writer socket to the listener socket. */
+        rc = connect (self->w, (struct sockaddr*) &addr, sizeof (addr));
+        if (nn_slow (rc == SOCKET_ERROR)) {
+            rc = nn_err_wsa_to_posix (WSAGetLastError ());
+            if (rc == EADDRINUSE) {
+                rc = closesocket (self->w);
+                if (nn_slow (rc == INVALID_SOCKET))
+                    goto wsafail;
+                continue;
+            }
+            goto wsafail2;
+        }
+        break;
+    }
+    if (i == NN_EFD_RETRIES)
+        goto wsafail2;
+
+    for (;;) {
 
         /*  Accept new incoming connection. */
         addrlen = sizeof (addr);
         self->r = accept (listener, (struct sockaddr*) &addr, &addrlen);
         if (nn_slow (self->r == INVALID_SOCKET || addrlen != sizeof (addr)))
-            goto wsafail;
+            goto wsafail2;
 
         /*  Check that the connection actually comes from the localhost. */
         if (nn_fast (addr.sin_addr.s_addr == htonl (INADDR_LOOPBACK)))
@@ -147,7 +176,7 @@ int nn_efd_init (struct nn_efd *self)
         goto wsafail;
 
     /*  Leave the critical section. */
-    brc = SetEvent (sync);
+    brc = ReleaseMutex (sync);
     win_assert (brc != 0);
     brc = CloseHandle (sync);
     win_assert (brc != 0);
@@ -164,22 +193,44 @@ int nn_efd_init (struct nn_efd *self)
 
 wsafail:
     rc = nn_err_wsa_to_posix (WSAGetLastError ());
-    brc = SetEvent (sync);
+wsafail2:
+    brc = ReleaseMutex (sync);
     win_assert (brc != 0);
+wsafail3:
     brc = CloseHandle (sync);
     win_assert (brc != 0);
-    errnum_assert (0, rc);
     return -rc;
+}
+
+void nn_efd_stop (struct nn_efd *self)
+{
+    int rc;
+    SOCKET s = self->w;
+    self->w = INVALID_SOCKET;
+
+    if (s != INVALID_SOCKET) {
+        rc = closesocket (s);
+        wsa_assert (rc != INVALID_SOCKET);
+    }
 }
 
 void nn_efd_term (struct nn_efd *self)
 {
     int rc;
+    SOCKET s;
 
-    rc = closesocket (self->w);
-    wsa_assert (rc != INVALID_SOCKET);
-    rc = closesocket (self->r);
-    wsa_assert (rc != INVALID_SOCKET);
+    s = self->r;
+    self->r = INVALID_SOCKET;
+    if (s != INVALID_SOCKET) {
+        rc = closesocket (s);
+        wsa_assert (rc != INVALID_SOCKET);
+    }
+    s = self->w;
+    self->w = INVALID_SOCKET;
+    if (s != INVALID_SOCKET) {
+       rc = closesocket (s);
+       wsa_assert (rc != INVALID_SOCKET);
+    }
 }
 
 nn_fd nn_efd_getfd (struct nn_efd *self)
@@ -191,10 +242,13 @@ void nn_efd_signal (struct nn_efd *self)
 {
     int rc;
     unsigned char c = 0xec;
+    SOCKET s = self->w;
 
-    rc = send (self->w, (char*) &c, 1, 0);
-    wsa_assert (rc != SOCKET_ERROR);
-    nn_assert (rc == 1);
+    if (nn_fast (s != INVALID_SOCKET)) {
+        rc = send (s, (char*) &c, 1, 0);
+        wsa_assert (rc != SOCKET_ERROR);
+        nn_assert (rc == 1);
+    }
 }
 
 void nn_efd_unsignal (struct nn_efd *self)
@@ -203,7 +257,10 @@ void nn_efd_unsignal (struct nn_efd *self)
     uint8_t buf [16];
 
     while (1) {
-        rc = recv (self->r, (char*) buf, sizeof (buf), 0);
+        SOCKET s = self->r;
+        if (nn_slow (s == INVALID_SOCKET))
+            break;
+        rc = recv (s, (char*) buf, sizeof (buf), 0);
         if (rc == SOCKET_ERROR && WSAGetLastError () == WSAEWOULDBLOCK)
             rc = 0;
         wsa_assert (rc != SOCKET_ERROR);

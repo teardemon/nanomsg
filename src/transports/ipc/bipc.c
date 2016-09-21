@@ -1,5 +1,7 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
+    Copyright 2016 Franklin "Snaipe" Mathieu <franklinmathieu@gmail.com>
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -20,8 +22,6 @@
     IN THE SOFTWARE.
 */
 
-#if !defined NN_HAVE_WINDOWS
-
 #include "bipc.h"
 #include "aipc.h"
 
@@ -35,8 +35,13 @@
 #include "../../utils/fast.h"
 
 #include <string.h>
+#if defined NN_HAVE_WINDOWS
+#include "../../utils/win.h"
+#else
 #include <unistd.h>
 #include <sys/un.h>
+#include <fcntl.h>
+#endif
 
 #define NN_BIPC_BACKLOG 10
 
@@ -80,28 +85,39 @@ const struct nn_epbase_vfptr nn_bipc_epbase_vfptr = {
 /*  Private functions. */
 static void nn_bipc_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
-static void nn_bipc_start_listening (struct nn_bipc *self);
+static void nn_bipc_shutdown (struct nn_fsm *self, int src, int type,
+    void *srcptr);
+static int nn_bipc_listen (struct nn_bipc *self);
 static void nn_bipc_start_accepting (struct nn_bipc *self);
 
 int nn_bipc_create (void *hint, struct nn_epbase **epbase)
 {
     struct nn_bipc *self;
+    int rc;
 
     /*  Allocate the new endpoint object. */
     self = nn_alloc (sizeof (struct nn_bipc), "bipc");
     alloc_assert (self);
 
+
     /*  Initialise the structure. */
     nn_epbase_init (&self->epbase, &nn_bipc_epbase_vfptr, hint);
-    nn_fsm_init_root (&self->fsm, nn_bipc_handler,
+    nn_fsm_init_root (&self->fsm, nn_bipc_handler, nn_bipc_shutdown,
         nn_epbase_getctx (&self->epbase));
     self->state = NN_BIPC_STATE_IDLE;
-    nn_usock_init (&self->usock, NN_BIPC_SRC_USOCK, &self->fsm);
     self->aipc = NULL;
     nn_list_init (&self->aipcs);
 
     /*  Start the state machine. */
     nn_fsm_start (&self->fsm);
+
+    nn_usock_init (&self->usock, NN_BIPC_SRC_USOCK, &self->fsm);
+
+    rc = nn_bipc_listen (self);
+    if (rc != 0) {
+        nn_epbase_term (&self->epbase);
+        return rc;
+    }
 
     /*  Return the base class as an out parameter. */
     *epbase = &self->epbase;
@@ -124,7 +140,7 @@ static void nn_bipc_destroy (struct nn_epbase *self)
 
     bipc = nn_cont (self, struct nn_bipc, epbase);
 
-    nn_assert (bipc->state == NN_BIPC_STATE_IDLE);
+    nn_assert_state (bipc, NN_BIPC_STATE_IDLE);
     nn_list_term (&bipc->aipcs);
     nn_assert (bipc->aipc == NULL);
     nn_usock_term (&bipc->usock);
@@ -134,21 +150,28 @@ static void nn_bipc_destroy (struct nn_epbase *self)
     nn_free (bipc);
 }
 
-static void nn_bipc_handler (struct nn_fsm *self, int src, int type,
+static void nn_bipc_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
+#if defined NN_HAVE_UNIX_SOCKETS
+    const char *addr;
+    int rc;
+#endif
+
     struct nn_bipc *bipc;
     struct nn_list_item *it;
     struct nn_aipc *aipc;
 
     bipc = nn_cont (self, struct nn_bipc, fsm);
 
-/******************************************************************************/
-/*  STOP procedure.                                                           */
-/******************************************************************************/
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
-        nn_aipc_stop (bipc->aipc);
-        bipc->state = NN_BIPC_STATE_STOPPING_AIPC;
+        if (bipc->aipc) {
+            nn_aipc_stop (bipc->aipc);
+            bipc->state = NN_BIPC_STATE_STOPPING_AIPC;
+        }
+        else {
+            bipc->state = NN_BIPC_STATE_STOPPING_USOCK;
+        }
     }
     if (nn_slow (bipc->state == NN_BIPC_STATE_STOPPING_AIPC)) {
         if (!nn_aipc_isidle (bipc->aipc))
@@ -156,6 +179,14 @@ static void nn_bipc_handler (struct nn_fsm *self, int src, int type,
         nn_aipc_term (bipc->aipc);
         nn_free (bipc->aipc);
         bipc->aipc = NULL;
+
+        /* On *nixes, unlink the domain socket file */
+#if defined NN_HAVE_UNIX_SOCKETS
+        addr = nn_epbase_getaddr (&bipc->epbase);
+        rc = unlink(addr);
+        errno_assert (rc == 0 || errno == ENOENT);
+#endif
+
         nn_usock_stop (&bipc->usock);
         bipc->state = NN_BIPC_STATE_STOPPING_USOCK;
     }
@@ -177,7 +208,7 @@ static void nn_bipc_handler (struct nn_fsm *self, int src, int type,
         nn_list_erase (&bipc->aipcs, &aipc->item);
         nn_aipc_term (aipc);
         nn_free (aipc);
-        
+
         /*  If there are no more aipc state machines, we can stop the whole
             bipc object. */
 aipcs_stopping:
@@ -191,59 +222,49 @@ aipcs_stopping:
         return;
     }
 
+    nn_fsm_bad_state(bipc->state, src, type);
+}
+
+static void nn_bipc_handler (struct nn_fsm *self, int src, int type,
+    void *srcptr)
+{
+    struct nn_bipc *bipc;
+    struct nn_aipc *aipc;
+
+    bipc = nn_cont (self, struct nn_bipc, fsm);
+
     switch (bipc->state) {
 
 /******************************************************************************/
 /*  IDLE state.                                                               */
 /******************************************************************************/
     case NN_BIPC_STATE_IDLE:
-        switch (src) {
-
-        case NN_FSM_ACTION:
-            switch (type) {
-            case NN_FSM_START:
-                nn_bipc_start_listening (bipc);
-                nn_bipc_start_accepting (bipc);
-                bipc->state = NN_BIPC_STATE_ACTIVE;
-                return;
-            default:
-                nn_assert (0);
-            }
-
-        default:
-            nn_assert (0);
-        }
+        nn_assert (src == NN_FSM_ACTION);
+        nn_assert (type == NN_FSM_START);
+        bipc->state = NN_BIPC_STATE_ACTIVE;
+        return;
 
 /******************************************************************************/
 /*  ACTIVE state.                                                             */
 /*  The execution is yielded to the aipc state machine in this state.         */
 /******************************************************************************/
     case NN_BIPC_STATE_ACTIVE:
-        if (srcptr == bipc->aipc) {
-            switch (type) {
-            case NN_AIPC_ACCEPTED:
-
-                /*  Move the newly created connection to the list of existing
-                    connections. */
-                nn_list_insert (&bipc->aipcs, &bipc->aipc->item,
-                    nn_list_end (&bipc->aipcs));
-                bipc->aipc = NULL;
-
-                /*  Start waiting for a new incoming connection. */
-                nn_bipc_start_accepting (bipc);
-
-                return;
-
-            default:
-                nn_assert (0);
-            }
+        if (src == NN_BIPC_SRC_USOCK) {
+            nn_assert (type == NN_USOCK_SHUTDOWN || type == NN_USOCK_STOPPED);
+            return;
         }
 
-        /*  For all remaining events we'll assume they are coming from one
-            of remaining child aipc objects. */
+        /* All other events come from child aipc objects. */
         nn_assert (src == NN_BIPC_SRC_AIPC);
         aipc = (struct nn_aipc*) srcptr;
         switch (type) {
+        case NN_AIPC_ACCEPTED:
+
+            nn_list_insert (&bipc->aipcs, &aipc->item,
+                nn_list_end (&bipc->aipcs));
+            bipc->aipc = NULL;
+            nn_bipc_start_accepting (bipc);
+            return;
         case NN_AIPC_ERROR:
             nn_aipc_stop (aipc);
             return;
@@ -253,27 +274,26 @@ aipcs_stopping:
             nn_free (aipc);
             return;
         default:
-            nn_assert (0);
+            nn_fsm_bad_action (bipc->state, src, type);
         }
 
 /******************************************************************************/
 /*  Invalid state.                                                            */
 /******************************************************************************/
     default:
-        nn_assert (0);
+        nn_fsm_bad_state (bipc->state, src, type);
     }
 }
 
-/******************************************************************************/
-/*  State machine actions.                                                    */
-/******************************************************************************/
-
-static void nn_bipc_start_listening (struct nn_bipc *self)
+static int nn_bipc_listen (struct nn_bipc *self)
 {
     int rc;
     struct sockaddr_storage ss;
     struct sockaddr_un *un;
     const char *addr;
+#if defined NN_HAVE_UNIX_SOCKETS
+    int fd;
+#endif
 
     /*  First, create the AF_UNIX address. */
     addr = nn_epbase_getaddr (&self->epbase);
@@ -284,20 +304,51 @@ static void nn_bipc_start_listening (struct nn_bipc *self)
     strncpy (un->sun_path, addr, sizeof (un->sun_path));
 
     /*  Delete the IPC file left over by eventual previous runs of
-        the application. */
-    rc = unlink (addr);
-    errno_assert (rc == 0 || errno == ENOENT);
+        the application. We'll check whether the file is still in use by
+        connecting to the endpoint. On Windows plaform, NamedPipe is used
+        which does not have an underlying file. */
+#if defined NN_HAVE_UNIX_SOCKETS
+    fd = socket (AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        rc = fcntl (fd, F_SETFL, O_NONBLOCK);
+        errno_assert (rc != -1 || errno == EINVAL);
+        rc = connect (fd, (struct sockaddr*) &ss,
+            sizeof (struct sockaddr_un));
+        if (rc == -1 && errno == ECONNREFUSED) {
+            rc = unlink (addr);
+            errno_assert (rc == 0 || errno == ENOENT);
+        }
+        rc = close (fd);
+        errno_assert (rc == 0);
+    }
+#endif
 
     /*  Start listening for incoming connections. */
     rc = nn_usock_start (&self->usock, AF_UNIX, SOCK_STREAM, 0);
-    /*  TODO: EMFILE error can happen here. We can wait a bit and re-try. */
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+        return rc;
+    }
+
     rc = nn_usock_bind (&self->usock,
         (struct sockaddr*) &ss, sizeof (struct sockaddr_un));
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+        nn_usock_stop (&self->usock);
+        return rc;
+    }
+
     rc = nn_usock_listen (&self->usock, NN_BIPC_BACKLOG);
-    errnum_assert (rc == 0, -rc);
+    if (rc < 0) {
+        nn_usock_stop (&self->usock);
+        return rc;
+    }
+    nn_bipc_start_accepting (self);
+
+    return 0;
 }
+
+/******************************************************************************/
+/*  State machine actions.                                                    */
+/******************************************************************************/
 
 static void nn_bipc_start_accepting (struct nn_bipc *self)
 {
@@ -311,6 +362,3 @@ static void nn_bipc_start_accepting (struct nn_bipc *self)
     /*  Start waiting for a new incoming connection. */
     nn_aipc_start (self->aipc, &self->usock);
 }
-
-#endif
-

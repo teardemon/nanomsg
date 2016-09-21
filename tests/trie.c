@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,6 +23,8 @@
 #include "../src/protocols/pubsub/trie.c"
 #include "../src/utils/alloc.c"
 #include "../src/utils/err.c"
+
+#include <stdio.h>
 
 int main ()
 {
@@ -157,7 +159,7 @@ int main ()
     nn_assert (rc == 0);
     rc = nn_trie_match (&trie, (const uint8_t*) "A", 1);
     nn_assert (rc == 0);
-    nn_trie_term (&trie);
+    nn_trie_term (&trie);  
 
     /*  Check converting from sparse node to dense node and vice versa. */
     nn_trie_init (&trie);

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,36 +23,55 @@
 #include "../src/nn.h"
 #include "../src/pair.h"
 #include "../src/pubsub.h"
+#include "../src/pipeline.h"
 #include "../src/ipc.h"
 
-#include "../src/utils/err.c"
-#include "../src/utils/sleep.c"
+#include "testutil.h"
 #include "../src/utils/thread.c"
 
 /*  Stress test the IPC transport. */
 
 #define THREAD_COUNT 100
+#define TEST2_THREAD_COUNT 10
+#define MESSAGES_PER_THREAD 10
+#define TEST_LOOPS 10
 #define SOCKET_ADDRESS "ipc://test-shutdown.ipc"
 
-static void routine (void *arg)
+volatile int active;
+
+static void routine (NN_UNUSED void *arg)
 {
-    int rc;
     int s;
 
     s = nn_socket (AF_SP, NN_SUB);
     if (s < 0 && nn_errno () == EMFILE)
         return;
     errno_assert (s >= 0);
-    rc = nn_connect (s, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
-    rc = nn_close (s);
-    errno_assert (rc == 0);
+    test_connect (s, SOCKET_ADDRESS);
+    test_close (s);
+}
+
+static void routine2 (NN_UNUSED void *arg)
+{
+    int s;
+    int i;
+
+    s = test_socket (AF_SP, NN_PULL);
+
+    for (i = 0; i < 10; ++i) {
+        test_connect (s, SOCKET_ADDRESS);
+    }
+
+    for (i = 0; i < MESSAGES_PER_THREAD; ++i) {
+        test_recv (s, "hello");
+    }
+
+    test_close (s);
+    active --;
 }
 
 int main ()
 {
-#if !defined NN_HAVE_WINDOWS
-    int rc;
     int sb;
     int i;
     int j;
@@ -60,22 +79,42 @@ int main ()
 
     /*  Stress the shutdown algorithm. */
 
-    sb = nn_socket (AF_SP, NN_PUB);
-    errno_assert (sb >= 0);
-    rc = nn_bind (sb, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
+#if defined(SIGPIPE) && defined(SIG_IGN)
+	signal (SIGPIPE, SIG_IGN);
+#endif
 
-    for (j = 0; j != 10; ++j) {
+    sb = test_socket (AF_SP, NN_PUB);
+    test_bind (sb, SOCKET_ADDRESS);
+
+    for (j = 0; j != TEST_LOOPS; ++j) {
         for (i = 0; i != THREAD_COUNT; ++i)
             nn_thread_init (&threads [i], routine, NULL);
         for (i = 0; i != THREAD_COUNT; ++i)
             nn_thread_term (&threads [i]);
     }
 
-    rc = nn_close (sb);
-    errno_assert (rc == 0);
+    test_close (sb);
 
-#endif
+    /*  Test race condition of sending message while socket shutting down  */
+
+    sb = test_socket (AF_SP, NN_PUSH);
+    test_bind (sb, SOCKET_ADDRESS);
+
+    for (j = 0; j != TEST_LOOPS; ++j) {
+        for (i = 0; i != TEST2_THREAD_COUNT; ++i)
+            nn_thread_init (&threads [i], routine2, NULL);
+        active = TEST2_THREAD_COUNT;
+
+        while (active) {
+            (void) nn_send (sb, "hello", 5, NN_DONTWAIT);
+            nn_sleep (0);
+        }
+
+        for (i = 0; i != TEST2_THREAD_COUNT; ++i)
+            nn_thread_term (&threads [i]);
+    }
+
+    test_close (sb);
 
     return 0;
 }

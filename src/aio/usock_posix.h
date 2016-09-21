@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -25,6 +25,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 
 struct nn_usock {
 
@@ -56,6 +57,9 @@ struct nn_usock {
             position were already received by the user. The data that follow
             will be received in the future. */
         size_t batch_pos;
+
+        /*  File descriptor received via SCM_RIGHTS, if any. */
+        int *pfd;
     } in;
 
     /*  Members related to sending data. */
@@ -76,7 +80,7 @@ struct nn_usock {
     struct nn_worker_task task_recv;
     struct nn_worker_task task_stop;
 
-    /*  Events raised by the usock. */ 
+    /*  Events raised by the usock. */
     struct nn_fsm_event event_established;
     struct nn_fsm_event event_sent;
     struct nn_fsm_event event_received;
@@ -85,4 +89,7 @@ struct nn_usock {
     /*  In ACCEPTING state points to the socket being accepted.
         In BEING_ACCEPTED state points to the listener socket. */
     struct nn_usock *asock;
+
+    /*  Errno remembered in NN_USOCK_ERROR state  */
+    int errnum;
 };

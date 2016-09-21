@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -25,8 +25,7 @@
 #include "../src/pubsub.h"
 #include "../src/ipc.h"
 
-#include "../src/utils/err.c"
-#include "../src/utils/sleep.c"
+#include "testutil.h"
 
 /*  Tests IPC transport. */
 
@@ -34,74 +33,101 @@
 
 int main ()
 {
-#if !defined NN_HAVE_WINDOWS
-    int rc;
     int sb;
     int sc;
     int i;
-    char buf [3];
+    int s1, s2;
+#if !defined(NN_HAVE_WINDOWS)
+    int rc;
+#endif
+
+    int size;
+    char * buf;
 
     /*  Try closing a IPC socket while it not connected. */
-    sc = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sc != -1);
-    rc = nn_connect (sc, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
-    rc = nn_close (sc);
-    errno_assert (rc == 0);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
+    test_close (sc);
 
     /*  Open the socket anew. */
-    sc = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sc != -1);
-    rc = nn_connect (sc, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
 
-    /*  Leave enough time for at least on re-connect attempt. */
+    /*  Leave enough time for at least one re-connect attempt. */
     nn_sleep (200);
 
-    sb = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sb != -1);
-    rc = nn_bind (sb, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, SOCKET_ADDRESS);
 
     /*  Ping-pong test. */
     for (i = 0; i != 1; ++i) {
-
-        rc = nn_send (sc, "0123456789012345678901234567890123456789", 40, 0);
-        errno_assert (rc >= 0);
-        nn_assert (rc == 40);
-
-        rc = nn_recv (sb, buf, sizeof (buf), 0);
-        errno_assert (rc >= 0);
-        nn_assert (rc == 40);
-
-        rc = nn_send (sb, "0123456789012345678901234567890123456789", 40, 0);
-        errno_assert (rc >= 0);
-        nn_assert (rc == 40);
-
-        rc = nn_recv (sc, buf, sizeof (buf), 0);
-        errno_assert (rc >= 0);
-        nn_assert (rc == 40);
+        test_send (sc, "0123456789012345678901234567890123456789");
+        test_recv (sb, "0123456789012345678901234567890123456789");
+        test_send (sb, "0123456789012345678901234567890123456789");
+        test_recv (sc, "0123456789012345678901234567890123456789");
     }
 
     /*  Batch transfer test. */
     for (i = 0; i != 100; ++i) {
-        rc = nn_send (sc, "XYZ", 3, 0);
-        errno_assert (rc >= 0);
-        nn_assert (rc == 3);
+        test_send (sc, "XYZ");
     }
     for (i = 0; i != 100; ++i) {
-        rc = nn_recv (sb, buf, sizeof (buf), 0);
-        errno_assert (rc >= 0);
-        nn_assert (rc == 3);
+        test_recv (sb, "XYZ");
     }
 
-    rc = nn_close (sc);
-    errno_assert (rc == 0);
-    rc = nn_close (sb);
-    errno_assert (rc == 0);
+    /*  Send something large enough to trigger overlapped I/O on Windows. */
+    size = 10000;
+    buf = malloc (size);
+    for (i = 0; i < size; ++i) {
+        buf[i] = 48 + i % 10;
+    }
+    buf[size-1] = '\0';
+    test_send (sc, buf);
+    test_recv (sb, buf);
+    free (buf);
 
+    test_close (sc);
+    test_close (sb);
+
+    /*  Test whether connection rejection is handled decently. */
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, SOCKET_ADDRESS);
+    s1 = test_socket (AF_SP, NN_PAIR);
+    test_connect (s1, SOCKET_ADDRESS);
+    s2 = test_socket (AF_SP, NN_PAIR);
+    test_connect (s2, SOCKET_ADDRESS);
+    nn_sleep (100);
+    test_close (s2);
+    test_close (s1);
+    test_close (sb);
+
+/*  On Windows, CreateNamedPipeA does not run exclusively.
+    We should look at fixing this, but it will require
+    changing the usock code for Windows.  In the meantime just
+    disable this test on Windows. */
+#if !defined(NN_HAVE_WINDOWS)
+    /*  Test two sockets binding to the same address. */
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, SOCKET_ADDRESS);
+    s1 = test_socket (AF_SP, NN_PAIR);
+    rc = nn_bind (s1, SOCKET_ADDRESS);
+    nn_assert (rc < 0);
+    errno_assert (nn_errno () == EADDRINUSE);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
+    nn_sleep (100);
+    test_send (sb, "ABC");
+    test_recv (sc, "ABC");
+    test_close (sb);
+    test_close (sc);
+    test_close (s1);
 #endif
+
+    /*  Test closing a socket that is waiting to connect. */
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
+    nn_sleep (100);
+    test_close (sc);
 
     return 0;
 }
-

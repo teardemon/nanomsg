@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,10 +23,10 @@
 #ifndef NN_HASH_INCLUDED
 #define NN_HASH_INCLUDED
 
-#include <stdint.h>
-#include <stddef.h>
-
 #include "list.h"
+
+#include <stddef.h>
+#include <stdint.h>
 
 /*  Use for initialising a hash item statically. */
 #define NN_HASH_ITEM_INITIALIZER {0xffff, NN_LIST_ITEM_INITILIZER}

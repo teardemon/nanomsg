@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -25,6 +25,7 @@
 #include "sock.h"
 
 #include "../utils/err.h"
+#include "../utils/attr.h"
 
 void nn_sockbase_init (struct nn_sockbase *self,
     const struct nn_sockbase_vfptr *vfptr, void *hint)
@@ -33,7 +34,7 @@ void nn_sockbase_init (struct nn_sockbase *self,
     self->sock = (struct nn_sock*) hint;
 }
 
-void nn_sockbase_term (struct nn_sockbase *self)
+void nn_sockbase_term (NN_UNUSED struct nn_sockbase *self)
 {
 }
 
@@ -54,3 +55,8 @@ int nn_sockbase_getopt (struct nn_sockbase *self, int option,
         optval, optvallen);
 }
 
+void nn_sockbase_stat_increment (struct nn_sockbase *self, int name,
+    int increment)
+{
+    nn_sock_stat_increment (self->sock, name, increment);
+}

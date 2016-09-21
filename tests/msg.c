@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
+    Copyright 2016 Franklin "Snaipe" Mathieu <franklinmathieu@gmail.com>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,13 +24,15 @@
 #include "../src/nn.h"
 #include "../src/pair.h"
 
-#include "../src/utils/err.c"
+#include "testutil.h"
 
 #include <string.h>
 
 #define SOCKET_ADDRESS "inproc://a"
 
-int main ()
+char longdata[1 << 20];
+
+int main (int argc, const char *argv[])
 {
     int rc;
     int sb;
@@ -38,15 +41,15 @@ int main ()
     int i;
     struct nn_iovec iov;
     struct nn_msghdr hdr;
+    char socket_address_tcp[128];
 
-    sb = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sb != -1);
-    rc = nn_bind (sb, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
-    sc = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (sc != -1);
-    rc = nn_connect (sc, SOCKET_ADDRESS);
-    errno_assert (rc >= 0);
+    test_addr_from(socket_address_tcp, "tcp", "127.0.0.1",
+            get_test_port(argc, argv));
+
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, SOCKET_ADDRESS);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, SOCKET_ADDRESS);
 
     buf1 = nn_allocmsg (256, 0);
     alloc_assert (buf1);
@@ -94,10 +97,32 @@ int main ()
     rc = nn_freemsg (buf2);
     errno_assert (rc == 0);
 
-    rc = nn_close (sc);
+    test_close (sc);
+    test_close (sb);
+
+    /*  Test receiving of large message  */
+
+    sb = test_socket (AF_SP, NN_PAIR);
+    test_bind (sb, socket_address_tcp);
+    sc = test_socket (AF_SP, NN_PAIR);
+    test_connect (sc, socket_address_tcp);
+
+    for (i = 0; i < (int) sizeof (longdata); ++i)
+        longdata[i] = '0' + (i % 10);
+    longdata [sizeof (longdata) - 1] = 0;
+    test_send (sb, longdata);
+
+    rc = nn_recv (sc, &buf2, NN_MSG, 0);
+    errno_assert (rc >= 0);
+    nn_assert (rc == sizeof (longdata) - 1);
+    nn_assert (buf2);
+    for (i = 0; i < (int) sizeof (longdata) - 1; ++i)
+        nn_assert (buf2 [i] == longdata [i]);
+    rc = nn_freemsg (buf2);
     errno_assert (rc == 0);
-    rc = nn_close (sb);
-    errno_assert (rc == 0);
+
+    test_close (sc);
+    test_close (sb);
 
     return 0;
 }

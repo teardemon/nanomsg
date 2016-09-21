@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -25,27 +25,8 @@
 
 #include <stdint.h>
 
-/*  Optimised retrieval of the current time. The clock object is not
-    thread-safe. */
-
-struct nn_clock
-{
-    uint64_t last_tsc;
-    uint64_t last_time;
-};
-
-/*  Initialise the clock object. */
-void nn_clock_init (struct nn_clock *self);
-
-/*  Terminate the clock object. */
-void nn_clock_term (struct nn_clock *self);
-
 /*  Returns current time in milliseconds. */
-uint64_t nn_clock_now (struct nn_clock *self);
-
-/*  Returns an unique timestamp. If the system doesn't support producing
-    timestamps the return value is zero. */
-uint64_t nn_clock_timestamp ();
+uint64_t nn_clock_ms (void);
 
 #endif
 

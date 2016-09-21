@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -253,7 +253,6 @@ int nn_trie_subscribe (struct nn_trie *self, const uint8_t *data, size_t size)
     /*  Step 1 -- Traverse the trie. */
 
     node = &self->root;
-    pos = 0;
     while (1) {
 
         /*  If there are no more nodes on the path, go to step 4. */
@@ -276,7 +275,7 @@ int nn_trie_subscribe (struct nn_trie *self, const uint8_t *data, size_t size)
 
         /*  Move to the next node. If it is not present, go to step 3. */
         n = nn_node_next (*node, *data);
-        if (!n)
+        if (!n || !*n)
             goto step3;
         node = n;
         ++data;
@@ -299,7 +298,6 @@ step2:
     memmove (ch->prefix, ch->prefix + pos + 1, ch->prefix_len);
     ch = nn_node_compact (ch);
     *nn_node_child (*node, 0) = ch;
-    pos = (*node)->prefix_len;
 
     /*  Step 3 -- Adjust the child array to accommodate the new character. */
 step3:
@@ -350,8 +348,9 @@ step3:
             }
             (*node)->u.dense.min = new_min;
             (*node)->u.dense.max = new_max;
-            ++(*node)->u.dense.nbr;
         }
+        ++(*node)->u.dense.nbr;
+
         node = nn_node_child (*node, c - (*node)->u.dense.min);
         ++data;
         --size;
@@ -415,8 +414,8 @@ step4:
         /*  Fill in the new node. */
         (*node)->refcount = 0;
         (*node)->type = more_nodes ? 1 : 0;
-        (*node)->prefix_len = size < (size_t) NN_TRIE_PREFIX_MAX ?
-            size : (size_t) NN_TRIE_PREFIX_MAX;
+        (*node)->prefix_len = size < (uint8_t) NN_TRIE_PREFIX_MAX ?
+            (uint8_t) size : (uint8_t) NN_TRIE_PREFIX_MAX;
         memcpy ((*node)->prefix, data, (*node)->prefix_len);
         data += (*node)->prefix_len;
         size -= (*node)->prefix_len;

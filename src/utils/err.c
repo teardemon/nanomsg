@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -26,6 +27,28 @@
 #include "win.h"
 #endif
 
+#ifdef NN_HAVE_BACKTRACE
+#include <execinfo.h>
+
+void nn_backtrace_print (void)
+{
+    void *frames[50];
+    int size;
+    size = backtrace (frames, sizeof (frames) / sizeof (frames[0]));
+    if (size > 1) {
+        /*  Don't include the frame nn_backtrace_print itself. */
+        backtrace_symbols_fd (&frames[1], size-1, fileno (stderr));
+    }
+}
+
+/* XXX: Add Windows backtraces */
+
+#else
+void nn_backtrace_print (void)
+{
+}
+#endif
+
 #include <stdlib.h>
 
 void nn_err_abort (void)
@@ -41,49 +64,61 @@ int nn_err_errno (void)
 const char *nn_err_strerror (int errnum)
 {
     switch (errnum) {
-#if defined NN_ENOTSUP_DEFINED
+#if defined NN_HAVE_WINDOWS
     case ENOTSUP:
         return "Not supported";
-#endif
-#if defined NN_EPROTONOSUPPORT_DEFINED
     case EPROTONOSUPPORT:
         return "Protocol not supported";
-#endif
-#if defined NN_ENOBUFS_DEFINED
     case ENOBUFS:
         return "No buffer space available";
-#endif
-#if defined NN_ENETDOWN_DEFINED
     case ENETDOWN:
         return "Network is down";
-#endif
-#if defined NN_EADDRINUSE_DEFINED
     case EADDRINUSE:
         return "Address in use";
-#endif
-#if defined NN_EADDRNOTAVAIL_DEFINED
     case EADDRNOTAVAIL:
         return "Address not available";
-#endif
-#if defined NN_ECONNREFUSED_DEFINED
     case ECONNREFUSED:
         return "Connection refused";
-#endif
-#if defined NN_EINPROGRESS_DEFINED
     case EINPROGRESS:
         return "Operation in progress";
-#endif
-#if defined NN_ENOTSOCK_DEFINED
     case ENOTSOCK:
         return "Not a socket";
-#endif
-#if defined NN_EAFNOSUPPORT_DEFINED
     case EAFNOSUPPORT:
         return "Address family not supported";
-#endif
-#if defined NN_EPROTO_DEFINED
     case EPROTO:
         return "Protocol error";
+    case EAGAIN:
+        return "Resource unavailable, try again";
+    case EBADF:
+        return "Bad file descriptor";
+    case EINVAL:
+        return "Invalid argument";
+    case EMFILE:
+        return "Too many open files";
+    case EFAULT:
+        return "Bad address";
+    case EACCES:
+        return "Permission denied";
+    case ENETRESET:
+        return "Connection aborted by network";
+    case ENETUNREACH:
+        return "Network unreachable";
+    case EHOSTUNREACH:
+        return "Host is unreachable";
+    case ENOTCONN:
+        return "The socket is not connected";
+    case EMSGSIZE:
+        return "Message too large";
+    case ETIMEDOUT:
+        return "Timed out";
+    case ECONNABORTED:
+        return "Connection aborted";
+    case ECONNRESET:
+        return "Connection reset";
+    case ENOPROTOOPT:
+        return "Protocol not available";
+    case EISCONN:
+        return "Socket is connected";
 #endif
     case ETERM:
         return "Nanomsg library was terminated";
@@ -148,6 +183,18 @@ int nn_err_wsa_to_posix (int wsaerr)
         return ECONNABORTED;
     case WSAECONNRESET:
         return ECONNRESET;
+    case WSAENOTSOCK:
+        return ENOTSOCK;
+    case ERROR_BROKEN_PIPE:
+        return ECONNRESET;
+    case WSAESOCKTNOSUPPORT:
+        return ESOCKTNOSUPPORT;
+    case ERROR_NOT_CONNECTED:
+        return ENOTCONN;
+    case ERROR_PIPE_NOT_CONNECTED:
+        return ENOTCONN;
+    case ERROR_NO_DATA:
+        return EPIPE;
     default:
         nn_assert (0);
     }
@@ -163,4 +210,3 @@ void nn_win_error (int err, char *buf, size_t bufsize)
 }
 
 #endif
-

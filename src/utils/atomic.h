@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -26,6 +26,9 @@
 #if defined NN_HAVE_WINDOWS
 #include "win.h"
 #define NN_ATOMIC_WINAPI
+#elif NN_HAVE_ATOMIC_SOLARIS
+#include <atomic.h>
+#define NN_ATOMIC_SOLARIS
 #elif defined NN_HAVE_GCC_ATOMIC_BUILTINS
 #define NN_ATOMIC_GCC_BUILTINS
 #else

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -46,6 +46,9 @@ struct nn_atcp {
     /*  The state machine. */
     struct nn_fsm fsm;
     int state;
+
+    /*  Pointer to the associated endpoint. */
+    struct nn_epbase *epbase;
 
     /*  Underlying socket. */
     struct nn_usock usock;

@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -24,6 +24,7 @@
 
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
+#include "../../utils/attr.h"
 
 #include "../../aio/ctx.h"
 
@@ -41,17 +42,19 @@
 static void nn_dns_notify (union sigval);
 static void nn_dns_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
+static void nn_dns_shutdown (struct nn_fsm *self, int src, int type,
+    void *srcptr);
 
 void nn_dns_init (struct nn_dns *self, int src, struct nn_fsm *owner)
 {
-    nn_fsm_init (&self->fsm, nn_dns_handler, src, self, owner);
+    nn_fsm_init (&self->fsm, nn_dns_handler, nn_dns_shutdown, src, self, owner);
     self->state = NN_DNS_STATE_IDLE;
     nn_fsm_event_init (&self->done);
 }
 
 void nn_dns_term (struct nn_dns *self)
 {
-    nn_assert (self->state == NN_DNS_STATE_IDLE);
+    nn_assert_state (self, NN_DNS_STATE_IDLE);
 
     nn_fsm_event_term (&self->done);
     nn_fsm_term (&self->fsm);
@@ -69,7 +72,7 @@ void nn_dns_start (struct nn_dns *self, const char *addr, size_t addrlen,
     struct gaicb *pgcb;
     struct sigevent sev;
 
-    nn_assert (self->state == NN_DNS_STATE_IDLE);
+    nn_assert_state (self, NN_DNS_STATE_IDLE);
 
     self->result = result;
 
@@ -148,22 +151,20 @@ static void nn_dns_notify (union sigval sval)
         memcpy (&self->result->addr, self->gcb.ar_result->ai_addr,
             self->gcb.ar_result->ai_addrlen);
         self->result->addrlen = (size_t) self->gcb.ar_result->ai_addrlen;
+        freeaddrinfo(self->gcb.ar_result);
         nn_fsm_action (&self->fsm, NN_DNS_ACTION_DONE);
     }
     nn_ctx_leave (self->fsm.ctx);
 }
 
-static void nn_dns_handler (struct nn_fsm *self, int src, int type,
-    void *srcptr)
+static void nn_dns_shutdown (struct nn_fsm *self, int src, int type,
+    NN_UNUSED void *srcptr)
 {
     int rc;
     struct nn_dns *dns;
 
     dns = nn_cont (self, struct nn_dns, fsm);
 
-/******************************************************************************/
-/*  STOP procedure.                                                           */
-/******************************************************************************/
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
         if (dns->state == NN_DNS_STATE_RESOLVING) {
             rc = gai_cancel (&dns->gcb);
@@ -192,6 +193,16 @@ static void nn_dns_handler (struct nn_fsm *self, int src, int type,
         return;
     }
 
+    nn_fsm_bad_state (dns->state, src, type);
+}
+
+static void nn_dns_handler (struct nn_fsm *self, int src, int type,
+    NN_UNUSED void *srcptr)
+{
+    struct nn_dns *dns;
+
+    dns = nn_cont (self, struct nn_dns, fsm);
+
     switch (dns->state) {
 /******************************************************************************/
 /*  IDLE state.                                                               */
@@ -209,10 +220,10 @@ static void nn_dns_handler (struct nn_fsm *self, int src, int type,
                 dns->state = NN_DNS_STATE_DONE;
                 return;
             default:
-                nn_assert (0);
+                nn_fsm_bad_action (dns->state, src, type);
             }
         default:
-            nn_assert (0);
+            nn_fsm_bad_source (dns->state, src, type);
         }
 
 /******************************************************************************/
@@ -227,23 +238,23 @@ static void nn_dns_handler (struct nn_fsm *self, int src, int type,
                 dns->state = NN_DNS_STATE_DONE;
                 return;
             default:
-                nn_assert (0);
+                nn_fsm_bad_action (dns->state, src, type);
             }
         default:
-            nn_assert (0);
+            nn_fsm_bad_source (dns->state, src, type);
         }
 
 /******************************************************************************/
 /*  DONE state.                                                               */
 /******************************************************************************/
     case NN_DNS_STATE_DONE:
-        nn_assert (0);
+        nn_fsm_bad_source (dns->state, src, type);
 
 /******************************************************************************/
 /*  Invalid state.                                                            */
 /******************************************************************************/
     default:
-        nn_assert (0);
+        nn_fsm_bad_state (dns->state, src, type);
     }
 }
 

@@ -1,5 +1,6 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
+    Copyright 2015 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -22,12 +23,13 @@
 
 #include "err.h"
 #include "fast.h"
+#include "closefd.h"
 
-#include <stdint.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdint.h>
 
 int nn_efd_init (struct nn_efd *self)
 {
@@ -54,22 +56,29 @@ int nn_efd_init (struct nn_efd *self)
 #endif
 
     flags = fcntl (self->r, F_GETFL, 0);
-	if (flags == -1)
+    if (flags == -1)
         flags = 0;
-	rc = fcntl (self->r, F_SETFL, flags | O_NONBLOCK);
+    rc = fcntl (self->r, F_SETFL, flags | O_NONBLOCK);
     errno_assert (rc != -1);
 
     return 0;
 }
 
+void nn_efd_stop (struct nn_efd *self)
+{
+    int fd = self->w;
+    self->w = -1;
+    nn_closefd (fd);
+}
+
 void nn_efd_term (struct nn_efd *self)
 {
-    int rc;
-
-    rc = close (self->r);
-    errno_assert (rc == 0);
-    rc = close (self->w);
-    errno_assert (rc == 0);
+    int fd = self->r;
+    self->r = -1;
+    nn_closefd (fd);
+    fd = self->w;
+    self->w = -1;
+    nn_closefd (fd);
 }
 
 nn_fd nn_efd_getfd (struct nn_efd *self)
@@ -81,11 +90,14 @@ void nn_efd_signal (struct nn_efd *self)
 {
     ssize_t nbytes;
     char c = 101;
+    int fd = self->w;
 
+    if (nn_slow (fd < 0))
+        return;
 #if defined MSG_NOSIGNAL
-    nbytes = send (self->w, &c, 1, MSG_NOSIGNAL);
+    nbytes = send (fd, &c, 1, MSG_NOSIGNAL);
 #else
-    nbytes = send (self->w, &c, 1, 0);
+    nbytes = send (fd, &c, 1, 0);
 #endif
     errno_assert (nbytes != -1);
     nn_assert (nbytes == 1);
@@ -97,6 +109,9 @@ void nn_efd_unsignal (struct nn_efd *self)
     uint8_t buf [16];
 
     while (1) {
+        int fd = self->r;
+        if (nn_slow (fd < 0))
+            return;
         nbytes = recv (self->r, buf, sizeof (buf), 0);
         if (nbytes < 0 && errno == EAGAIN)
             nbytes = 0;
@@ -105,4 +120,3 @@ void nn_efd_unsignal (struct nn_efd *self)
             break;
     }
 }
-

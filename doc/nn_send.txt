@@ -17,10 +17,11 @@ DESCRIPTION
 The function will send a message containing the data from buffer pointed to
 by 'buf' parameter to the socket 's'. The message will be 'len' bytes long.
 
-Alternatively, to send a buffer allocated by linknanomsg:nn_allocmsg[3] function
+Alternatively, to send a buffer allocated by <<nn_allocmsg.3.txt#,nn_allocmsg(3)>> function
 set the buf parameter to point to the pointer to the buffer and 'len' parameter
-to _NN_MSG_ constant. In this case the buffer will be deallocated by _nn_send_
-function. Trying to deallocate it afterwards will result in undefined behaviour.
+to _NN_MSG_ constant. In this case a successful call to _nn_send_ will
+deallocate the buffer. Trying to deallocate it afterwards will result in
+undefined behaviour.
 
 Which of the peers the message will be sent to is determined by
 the particular socket type.
@@ -36,12 +37,15 @@ to EAGAIN.
 RETURN VALUE
 ------------
 If the function succeeds, the number of bytes in the message is returned.
-Otherwise, a negative number is returned and 'errno' is set to to one of the
+Otherwise, -1 is returned and 'errno' is set to to one of the
 values defined below.
 
 
 ERRORS
 ------
+*EFAULT*::
+'buf' is NULL or 'len' is NN_MSG and the message pointer (pointed to by
+'buf') is NULL.
 *EBADF*::
 The provided socket is invalid.
 *ENOTSUP*::
@@ -64,20 +68,31 @@ The library is terminating.
 EXAMPLE
 -------
 
+Using data directly:
+
 ----
 nbytes = nn_send (s, "ABC", 3, 0);
+assert (nbytes == 3);
+----
+
+Using a pre-allocated message buffer:
+
+----
+void *msg = nn_allocmsg(3, 0);
+strncpy(msg, "ABC", 3);
+nbytes = nn_send (s, &msg, NN_MSG, 0);
 assert (nbytes == 3);
 ----
 
 
 SEE ALSO
 --------
-linknanomsg:nn_recv[3]
-linknanomsg:nn_sendmsg[3]
-linknanomsg:nn_socket[3]
-linknanomsg:nanomsg[7]
+<<nn_recv.3.txt#,nn_recv(3)>>
+<<nn_sendmsg.3.txt#,nn_sendmsg(3)>>
+<<nn_socket.3.txt#,nn_socket(3)>>
+<<nanomsg.7.txt#,nanomsg(7)>>
 
 AUTHORS
 -------
-Martin Sustrik <sustrik@250bpm.com>
+link:mailto:sustrik@250bpm.com[Martin Sustrik]
 

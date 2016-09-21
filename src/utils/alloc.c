@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -28,8 +28,8 @@
 
 #include <stdlib.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <stdint.h>
 
 struct nn_alloc_hdr {
     size_t size;
@@ -95,7 +95,7 @@ void *nn_realloc (void *ptr, size_t size)
         nn_alloc_bytes, nn_alloc_blocks);
     nn_mutex_unlock (&nn_alloc_sync);
 
-    return newchunk + sizeof (size_t);
+    return newchunk + sizeof (struct nn_alloc_hdr);
 }
 
 void nn_free (void *ptr)

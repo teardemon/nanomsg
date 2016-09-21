@@ -1,6 +1,7 @@
 #
-#   Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+#   Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 #   Copyright (c) 2013 GoPivotal, Inc.  All rights reserved.
+#   Copyright (c) 2015-2016 Jack R. Dunaway. All rights reserved.
 #
 #   Permission is hereby granted, free of charge, to any person obtaining a copy
 #   of this software and associated documentation files (the "Software"),
@@ -21,17 +22,12 @@
 #   IN THE SOFTWARE.
 #
 
-set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-set (CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-
 set (NN_SOURCES
     nn.h
-    transport.h
-    protocol.h
     inproc.h
     ipc.h
     tcp.h
+    ws.h
     pair.h
     pubsub.h
     reqrep.h
@@ -45,24 +41,16 @@ set (NN_SOURCES
     core/global.h
     core/global.c
     core/pipe.c
+    core/poll.c
     core/sock.h
     core/sock.c
     core/sockbase.c
-    core/device.c
     core/symbol.c
 
     aio/ctx.h
     aio/ctx.c
     aio/fsm.h
     aio/fsm.c
-    aio/poller.h
-    aio/poller.c
-    aio/poller_epoll.h
-    aio/poller_epoll.inc
-    aio/poller_kqueue.h
-    aio/poller_kqueue.inc
-    aio/poller_poll.h
-    aio/poller_poll.inc
     aio/pool.h
     aio/pool.c
     aio/timer.h
@@ -71,51 +59,41 @@ set (NN_SOURCES
     aio/timerset.c
     aio/usock.h
     aio/usock.c
-    aio/usock_posix.h
-    aio/usock_posix.inc
-    aio/usock_win.h
-    aio/usock_win.inc
     aio/worker.h
     aio/worker.c
-    aio/worker_posix.h
-    aio/worker_posix.inc
-    aio/worker_win.h
-    aio/worker_win.inc
 
     utils/alloc.h
     utils/alloc.c
     utils/atomic.h
     utils/atomic.c
+    utils/attr.h
     utils/chunk.h
     utils/chunk.c
     utils/chunkref.h
     utils/chunkref.c
     utils/clock.h
     utils/clock.c
+    utils/closefd.h
+    utils/closefd.c
     utils/cont.h
     utils/efd.h
     utils/efd.c
-    utils/efd_eventfd.h
-    utils/efd_eventfd.inc
-    utils/efd_pipe.h
-    utils/efd_pipe.inc
-    utils/efd_socketpair.h
-    utils/efd_socketpair.inc
-    utils/efd_win.h
-    utils/efd_win.inc
     utils/err.h
     utils/err.c
     utils/fast.h
-    utils/glock.h
-    utils/glock.c
+    utils/fd.h
     utils/hash.h
     utils/hash.c
     utils/list.h
     utils/list.c
     utils/msg.h
     utils/msg.c
+    utils/condvar.h
+    utils/condvar.c
     utils/mutex.h
     utils/mutex.c
+    utils/once.h
+    utils/once.c
     utils/queue.h
     utils/queue.c
     utils/random.h
@@ -126,12 +104,11 @@ set (NN_SOURCES
     utils/sleep.c
     utils/thread.h
     utils/thread.c
-    utils/thread_posix.h
-    utils/thread_posix.inc
-    utils/thread_win.h
-    utils/thread_win.inc
     utils/wire.h
     utils/wire.c
+
+    devices/device.h
+    devices/device.c
 
     protocols/utils/dist.h
     protocols/utils/dist.c
@@ -169,11 +146,17 @@ set (NN_SOURCES
     protocols/pubsub/sub.c
     protocols/pubsub/trie.h
     protocols/pubsub/trie.c
+    protocols/pubsub/xpub.h
+    protocols/pubsub/xpub.c
+    protocols/pubsub/xsub.h
+    protocols/pubsub/xsub.c
 
     protocols/reqrep/req.h
     protocols/reqrep/req.c
     protocols/reqrep/rep.h
     protocols/reqrep/rep.c
+    protocols/reqrep/task.h
+    protocols/reqrep/task.c
     protocols/reqrep/xrep.h
     protocols/reqrep/xrep.c
     protocols/reqrep/xreq.h
@@ -204,6 +187,8 @@ set (NN_SOURCES
     transports/utils/port.c
     transports/utils/streamhdr.h
     transports/utils/streamhdr.c
+    transports/utils/base64.h
+    transports/utils/base64.c
 
     transports/inproc/binproc.h
     transports/inproc/binproc.c
@@ -239,41 +224,158 @@ set (NN_SOURCES
     transports/tcp/stcp.c
     transports/tcp/tcp.h
     transports/tcp/tcp.c
+
+    transports/ws/aws.h
+    transports/ws/aws.c
+    transports/ws/bws.h
+    transports/ws/bws.c
+    transports/ws/cws.h
+    transports/ws/cws.c
+    transports/ws/sws.h
+    transports/ws/sws.c
+    transports/ws/ws.h
+    transports/ws/ws.c
+    transports/ws/ws_handshake.h
+    transports/ws/ws_handshake.c
+    transports/ws/sha1.h
+    transports/ws/sha1.c
 )
 
-#  Here we cause symbols not to be exported from the library unless
-#  they are explicitly marked by NN_EXPORT specifier.
-#  Note: For MSVC there's no need for defining a special option. With MSVC
-#  symbols are not exported from the library unless explicitly said so.
-if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER MATCHES "/(icpc|icc)$")
-    add_definitions (-fvisibility=hidden)
+if (WIN32)
+    list (APPEND NN_SOURCES
+        aio/usock_win.h
+        aio/usock_win.inc
+        aio/worker_win.h
+        aio/worker_win.inc
+        utils/thread_win.h
+        utils/thread_win.inc
+        utils/win.h
+    )
+elseif (UNIX)
+    list (APPEND NN_SOURCES
+        aio/usock_posix.h
+        aio/usock_posix.inc
+        aio/worker_posix.h
+        aio/worker_posix.inc
+        utils/thread_posix.h
+        utils/thread_posix.inc
+    )
+else ()
+    message (FATAL_ERROR "Assertion failed; this path is unreachable.")
 endif ()
 
-add_library (nanomsg SHARED ${NN_SOURCES})
-set_target_properties (nanomsg PROPERTIES VERSION "${NN_VERSION_STR}")
-
-add_definitions (-DNN_EXPORTS)
-
-if (UNIX AND NOT NN_HAVE_OSX)
-    target_link_libraries (nanomsg rt)
+if (NN_HAVE_EPOLL)
+    add_definitions (-DNN_USE_EPOLL)
+    list (APPEND NN_SOURCES
+        aio/poller.h
+        aio/poller.c
+        aio/poller_epoll.h
+        aio/poller_epoll.inc
+    )
+elseif (NN_HAVE_KQUEUE)
+    add_definitions (-DNN_USE_KQUEUE)
+    list (APPEND NN_SOURCES
+        aio/poller.h
+        aio/poller.c
+        aio/poller_kqueue.h
+        aio/poller_kqueue.inc
+    )
+elseif (NN_HAVE_POLL)
+    add_definitions (-DNN_USE_POLL)
+    list (APPEND NN_SOURCES
+        aio/poller.h
+        aio/poller.c
+        aio/poller_poll.h
+        aio/poller_poll.inc
+    )
+elseif (NN_HAVE_WINSOCK)
+    # No operation
+else ()
+    message (SEND_ERROR "ERROR: could not determine socket polling method.")
+    message (SEND_ERROR "${ISSUE_REPORT_MSG}" )
 endif ()
 
-if (NN_HAVE_WINDOWS)
-    target_link_libraries (nanomsg ws2_32)
-    target_link_libraries (nanomsg Mswsock.lib)
-    target_link_libraries (nanomsg Advapi32.lib)
+if (NN_HAVE_EVENTFD)
+    add_definitions (-DNN_USE_EVENTFD)
+    list (APPEND NN_SOURCES
+        utils/efd_eventfd.h
+        utils/efd_eventfd.inc
+    )
+elseif (NN_HAVE_PIPE)
+    add_definitions (-DNN_USE_PIPE)
+    list (APPEND NN_SOURCES
+        utils/efd_pipe.h
+        utils/efd_pipe.inc
+    )
+elseif (NN_HAVE_SOCKETPAIR)
+    add_definitions (-DNN_USE_SOCKETPAIR)
+    list (APPEND NN_SOURCES
+        utils/efd_socketpair.h
+        utils/efd_socketpair.inc
+    )
+elseif (NN_HAVE_WINSOCK)
+    add_definitions (-DNN_USE_WINSOCK)
+    list (APPEND NN_SOURCES
+        utils/efd_win.h
+        utils/efd_win.inc
+    )
+else ()
+    message (SEND_ERROR "ERROR: could not determine socket signaling method.")
+    message (SEND_ERROR "${ISSUE_REPORT_MSG}" )
 endif ()
 
-if (NN_HAVE_SOLARIS)
-    target_link_libraries (nanomsg socket)
-    target_link_libraries (nanomsg nsl)
+# Provide same folder structure in IDE as on disk
+foreach (f ${NN_SOURCES})
+    # Get the path of the file relative to source directory
+    if (IS_ABSOLUTE "${f}")
+        file (RELATIVE_PATH f ${CMAKE_CURRENT_SOURCE_DIR} ${f})
+    endif ()
+    set (SRC_GROUP "${f}")
+    set (f "${CMAKE_CURRENT_SOURCE_DIR}/${f}")
+
+    # Remove the filename part
+    string (REGEX REPLACE "(.*)(/[^/]*)$" "\\1" SRC_GROUP ${SRC_GROUP})
+
+    # CMake source_group expects \\, not /
+    string (REPLACE / \\ SRC_GROUP ${SRC_GROUP})
+    source_group ("${SRC_GROUP}" FILES ${f})
+endforeach ()
+
+if (NN_STATIC_LIB)
+    add_library (${PROJECT_NAME} STATIC ${NN_SOURCES})
+else ()
+    add_library (${PROJECT_NAME} SHARED ${NN_SOURCES})
+    add_definitions (-DNN_SHARED_LIB)
+    set_target_properties (${PROJECT_NAME} PROPERTIES
+        VERSION "${NN_PACKAGE_VERSION}"
+        SOVERSION "${NN_ABI_VERSION}")
 endif ()
 
-if (NN_HAVE_GETADDRINFO_A)
-    target_link_libraries (nanomsg anl)
-endif ()
+# Set library outputs same as top-level project binary outputs
+set_target_properties (${PROJECT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
+set_target_properties (${PROJECT_NAME} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
+set_target_properties (${PROJECT_NAME} PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
 
-target_link_libraries (nanomsg ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries (${PROJECT_NAME} ${NN_REQUIRED_LIBRARIES})
+if(THREADS_HAVE_PTHREAD_ARG)
+    add_definitions (-pthread)
+endif()
+if(CMAKE_THREAD_LIBS_INIT)
+    target_link_libraries (${PROJECT_NAME} "${CMAKE_THREAD_LIBS_INIT}")
+endif()
 
-install (TARGETS nanomsg DESTINATION lib)
-
+# pkg-config file
+if(NN_REQUIRED_LIBRARIES)
+    foreach (lib ${NN_REQUIRED_LIBRARIES})
+        set (NN_REQUIRED_LFLAGS "${NN_REQUIRED_LFLAGS} -l${lib}")
+    endforeach()
+endif()
+configure_file (pkgconfig.in ${PROJECT_NAME}.pc @ONLY)
+install (
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+install (TARGETS ${PROJECT_NAME}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

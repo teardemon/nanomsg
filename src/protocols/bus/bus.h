@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -21,7 +21,7 @@
 */
 
 #ifndef NN_BUS_INCLUDED
-#define NN_PBUS_INCLUDED
+#define NN_BUS_INCLUDED
 
 #include "../../protocol.h"
 

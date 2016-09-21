@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -27,8 +27,8 @@
 
 #include "chunk.h"
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /*  This class represents a reference to a data chunk. It's either an actual
     reference to data allocated on the heap, or if short enough, it may store
@@ -37,7 +37,13 @@
     we can avoid additional memory allocation per message. */
 
 struct nn_chunkref {
-    uint8_t ref [NN_CHUNKREF_MAX];
+    union {
+        uint8_t ref [NN_CHUNKREF_MAX];
+
+        /* This option is present only to force alignemt of nn_chunkref to
+           the word boudnary. */
+        void *unused;
+    } u;
 };
 
 /*  Initialise the chunkref. The actual storage will be either on stack (for

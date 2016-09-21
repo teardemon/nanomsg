@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,7 +23,7 @@
 #include "../src/nn.h"
 #include "../src/pair.h"
 
-#include "../src/utils/err.c"
+#include "testutil.h"
 #include "../src/utils/stopwatch.c"
 
 int main ()
@@ -35,8 +35,7 @@ int main ()
     struct nn_stopwatch stopwatch;
     uint64_t elapsed;
 
-    s = nn_socket (AF_SP, NN_PAIR);
-    errno_assert (s != -1);
+    s = test_socket (AF_SP, NN_PAIR);
 
     timeo = 100;
     rc = nn_setsockopt (s, NN_SOL_SOCKET, NN_RCVTIMEO, &timeo, sizeof (timeo));
@@ -44,7 +43,7 @@ int main ()
     nn_stopwatch_init (&stopwatch);
     rc = nn_recv (s, buf, sizeof (buf), 0);
     elapsed = nn_stopwatch_term (&stopwatch);
-    errno_assert (rc < 0 && nn_errno () == EAGAIN);
+    errno_assert (rc < 0 && nn_errno () == ETIMEDOUT);
     time_assert (elapsed, 100000);
 
     timeo = 100;
@@ -53,11 +52,10 @@ int main ()
     nn_stopwatch_init (&stopwatch);
     rc = nn_send (s, "ABC", 3, 0);
     elapsed = nn_stopwatch_term (&stopwatch);
-    errno_assert (rc < 0 && nn_errno () == EAGAIN);
+    errno_assert (rc < 0 && nn_errno () == ETIMEDOUT);
     time_assert (elapsed, 100000);
 
-    rc = nn_close (s);
-    errno_assert (rc == 0);
+    test_close (s);
 
     return 0;
 }

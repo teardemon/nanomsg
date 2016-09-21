@@ -1,5 +1,7 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013-2014 Martin Sustrik  All rights reserved.
+    Copyright (c) 2013 GoPivotal, Inc.  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -25,63 +27,68 @@
 #include "../utils/err.h"
 #include "../utils/fast.h"
 #include "../utils/cont.h"
+#include "../utils/attr.h"
+#include "../utils/queue.h"
 
 /*  Private functions. */
 static void nn_worker_routine (void *arg);
 
-void nn_worker_fd_init (struct nn_worker_fd *self, struct nn_fsm *owner)
+void nn_worker_fd_init (struct nn_worker_fd *self, int src,
+    struct nn_fsm *owner)
 {
+    self->src = src;
     self->owner = owner;
 }
 
-void nn_worker_fd_term (struct nn_worker_fd *self)
+void nn_worker_fd_term (NN_UNUSED struct nn_worker_fd *self)
 {
 }
 
 void nn_worker_add_fd (struct nn_worker *self, int s, struct nn_worker_fd *fd)
 {
-    nn_poller_add (&((struct nn_worker*) self)->poller, s, &fd->hndl);
+    nn_poller_add (&self->poller, s, &fd->hndl);
 }
 
 void nn_worker_rm_fd (struct nn_worker *self, struct nn_worker_fd *fd)
 {
-    nn_poller_rm (&((struct nn_worker*) self)->poller, &fd->hndl);
+    nn_poller_rm (&self->poller, &fd->hndl);
 }
 
 void nn_worker_set_in (struct nn_worker *self, struct nn_worker_fd *fd)
 {
-    nn_poller_set_in (&((struct nn_worker*) self)->poller, &fd->hndl);
+    nn_poller_set_in (&self->poller, &fd->hndl);
 }
 
 void nn_worker_reset_in (struct nn_worker *self, struct nn_worker_fd *fd)
 {
-    nn_poller_reset_in (&((struct nn_worker*) self)->poller, &fd->hndl);
+    nn_poller_reset_in (&self->poller, &fd->hndl);
 }
 
 void nn_worker_set_out (struct nn_worker *self, struct nn_worker_fd *fd)
 {
-    nn_poller_set_out (&((struct nn_worker*) self)->poller, &fd->hndl);
+    nn_poller_set_out (&self->poller, &fd->hndl);
 }
 
 void nn_worker_reset_out (struct nn_worker *self, struct nn_worker_fd *fd)
 {
-    nn_poller_reset_out (&((struct nn_worker*) self)->poller, &fd->hndl);
+    nn_poller_reset_out (&self->poller, &fd->hndl);
 }
 
 void nn_worker_add_timer (struct nn_worker *self, int timeout,
     struct nn_worker_timer *timer)
 {
-    nn_timerset_add (&((struct nn_worker*) self)->timerset, timeout,
-        &timer->hndl);
+    nn_timerset_add (&self->timerset, timeout, &timer->hndl);
 }
 
 void nn_worker_rm_timer (struct nn_worker *self, struct nn_worker_timer *timer)
 {
-    nn_timerset_rm (&((struct nn_worker*) self)->timerset, &timer->hndl);
+    nn_timerset_rm (&self->timerset, &timer->hndl);
 }
 
-void nn_worker_task_init (struct nn_worker_task *self, struct nn_fsm *owner)
+void nn_worker_task_init (struct nn_worker_task *self, int src,
+    struct nn_fsm *owner)
 {
+    self->src = src;
     self->owner = owner;
     nn_queue_item_init (&self->item);
 }
@@ -139,6 +146,13 @@ void nn_worker_execute (struct nn_worker *self, struct nn_worker_task *task)
     nn_mutex_unlock (&self->sync);
 }
 
+void nn_worker_cancel (struct nn_worker *self, struct nn_worker_task *task)
+{
+    nn_mutex_lock (&self->sync);
+    nn_queue_remove (&self->tasks, &task->item);
+    nn_mutex_unlock (&self->sync);
+}
+
 static void nn_worker_routine (void *arg)
 {
     int rc;
@@ -171,7 +185,7 @@ static void nn_worker_routine (void *arg)
             errnum_assert (rc == 0, -rc);
             timer = nn_cont (thndl, struct nn_worker_timer, hndl);
             nn_ctx_enter (timer->owner->ctx);
-            timer->owner->fn (timer->owner, -1, NN_WORKER_TIMER_TIMEOUT, timer);
+            nn_fsm_feed (timer->owner, -1, NN_WORKER_TIMER_TIMEOUT, timer);
             nn_ctx_leave (timer->owner->ctx);
         }
 
@@ -206,6 +220,12 @@ static void nn_worker_routine (void *arg)
 
                     /*  If the worker thread is asked to stop, do so. */
                     if (nn_slow (item == &self->stop)) {
+                        /*  Make sure we remove all the other workers from
+                            the queue, because we're not doing anything with
+                            them. */
+                        while (nn_queue_pop (&tasks) != NULL) {
+                            continue;
+                        }
                         nn_queue_term (&tasks);
                         return;
                     }
@@ -214,7 +234,7 @@ static void nn_worker_routine (void *arg)
                         arrived in the worker thread. */
                     task = nn_cont (item, struct nn_worker_task, item);
                     nn_ctx_enter (task->owner->ctx);
-                    task->owner->fn (task->owner, -1,
+                    nn_fsm_feed (task->owner, task->src,
                         NN_WORKER_TASK_EXECUTE, task);
                     nn_ctx_leave (task->owner->ctx);
                 }
@@ -225,8 +245,9 @@ static void nn_worker_routine (void *arg)
             /*  It's a true I/O event. Invoke the handler. */
             fd = nn_cont (phndl, struct nn_worker_fd, hndl);
             nn_ctx_enter (fd->owner->ctx);
-            fd->owner->fn (fd->owner, -1, pevent, fd);
+            nn_fsm_feed (fd->owner, fd->src, pevent, fd);
             nn_ctx_leave (fd->owner->ctx);
         }
     }
 }
+

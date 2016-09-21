@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,11 +23,10 @@
 #ifndef NN_AIPC_INCLUDED
 #define NN_AIPC_INCLUDED
 
-#if !defined NN_HAVE_WINDOWS
-
 #include "sipc.h"
 
 #include "../../transport.h"
+#include "../../ipc.h"
 
 #include "../../aio/fsm.h"
 #include "../../aio/usock.h"
@@ -48,6 +47,9 @@ struct nn_aipc {
     /*  The state machine. */
     struct nn_fsm fsm;
     int state;
+
+    /*  Pointer to the associated endpoint. */
+    struct nn_epbase *epbase;
 
     /*  Underlying socket. */
     struct nn_usock usock;
@@ -74,8 +76,6 @@ void nn_aipc_term (struct nn_aipc *self);
 int nn_aipc_isidle (struct nn_aipc *self);
 void nn_aipc_start (struct nn_aipc *self, struct nn_usock *listener);
 void nn_aipc_stop (struct nn_aipc *self);
-
-#endif
 
 #endif
 

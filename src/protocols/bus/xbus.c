@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2013-2014 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -30,10 +30,10 @@
 #include "../../utils/fast.h"
 #include "../../utils/alloc.h"
 #include "../../utils/list.h"
+#include "../../utils/attr.h"
 
 #include <stddef.h>
 #include <string.h>
-#include <stdint.h>
 
 /*  To make the algorithm super efficient we directly cast pipe pointers to
     pipe IDs (rather than maintaining a hash table). For this to work, it is
@@ -85,14 +85,20 @@ int nn_xbus_add (struct nn_sockbase *self, struct nn_pipe *pipe)
 {
     struct nn_xbus *xbus;
     struct nn_xbus_data *data;
+    int rcvprio;
+    size_t sz;
 
     xbus = nn_cont (self, struct nn_xbus, sockbase);
 
-    data = nn_alloc (sizeof (struct nn_xbus_data),
-        "pipe data (xbus)");
+    sz = sizeof (rcvprio);
+    nn_pipe_getopt (pipe, NN_SOL_SOCKET, NN_RCVPRIO, &rcvprio, &sz);
+    nn_assert (sz == sizeof (rcvprio));
+    nn_assert (rcvprio >= 1 && rcvprio <= 16);
+
+    data = nn_alloc (sizeof (struct nn_xbus_data), "pipe data (xbus)");
     alloc_assert (data);
-    nn_fq_add (&xbus->inpipes, pipe, &data->initem, 8);
-    nn_dist_add (&xbus->outpipes, pipe, &data->outitem);
+    nn_fq_add (&xbus->inpipes, &data->initem, pipe, rcvprio);
+    nn_dist_add (&xbus->outpipes, &data->outitem, pipe);
     nn_pipe_setdata (pipe, data);
 
     return 0;
@@ -106,8 +112,8 @@ void nn_xbus_rm (struct nn_sockbase *self, struct nn_pipe *pipe)
     xbus = nn_cont (self, struct nn_xbus, sockbase);
     data = nn_pipe_getdata (pipe);
 
-    nn_fq_rm (&xbus->inpipes, pipe, &data->initem);
-    nn_dist_rm (&xbus->outpipes, pipe, &data->outitem);
+    nn_fq_rm (&xbus->inpipes, &data->initem);
+    nn_dist_rm (&xbus->outpipes, &data->outitem);
 
     nn_free (data);
 }
@@ -120,7 +126,7 @@ void nn_xbus_in (struct nn_sockbase *self, struct nn_pipe *pipe)
     xbus = nn_cont (self, struct nn_xbus, sockbase);
     data = nn_pipe_getdata (pipe);
 
-    nn_fq_in (&xbus->inpipes, pipe, &data->initem);
+    nn_fq_in (&xbus->inpipes, &data->initem);
 }
 
 void nn_xbus_out (struct nn_sockbase *self, struct nn_pipe *pipe)
@@ -131,7 +137,7 @@ void nn_xbus_out (struct nn_sockbase *self, struct nn_pipe *pipe)
     xbus = nn_cont (self, struct nn_xbus, sockbase);
     data = nn_pipe_getdata (pipe);
 
-    nn_dist_out (&xbus->outpipes, pipe, &data->outitem);
+    nn_dist_out (&xbus->outpipes, &data->outitem);
 }
 
 int nn_xbus_events (struct nn_sockbase *self)
@@ -145,13 +151,13 @@ int nn_xbus_send (struct nn_sockbase *self, struct nn_msg *msg)
     size_t hdrsz;
     struct nn_pipe *exclude;
 
-    hdrsz = nn_chunkref_size (&msg->hdr);
+    hdrsz = nn_chunkref_size (&msg->sphdr);
     if (hdrsz == 0)
         exclude = NULL;
     else if (hdrsz == sizeof (uint64_t)) {
-        memcpy (&exclude, nn_chunkref_data (&msg->hdr), sizeof (exclude));
-        nn_chunkref_term (&msg->hdr);
-        nn_chunkref_init (&msg->hdr, 0);
+        memcpy (&exclude, nn_chunkref_data (&msg->sphdr), sizeof (exclude));
+        nn_chunkref_term (&msg->sphdr);
+        nn_chunkref_init (&msg->sphdr, 0);
     }
     else
         return -EINVAL;
@@ -176,28 +182,30 @@ int nn_xbus_recv (struct nn_sockbase *self, struct nn_msg *msg)
             return rc;
 
         /*  The message should have no header. Drop malformed messages. */
-        if (nn_chunkref_size (&msg->hdr) == 0)
+        if (nn_chunkref_size (&msg->sphdr) == 0)
             break;
         nn_msg_term (msg);
     }
 
     /*  Add pipe ID to the message header. */
-    nn_chunkref_term (&msg->hdr);
-    nn_chunkref_init (&msg->hdr, sizeof (uint64_t));
-    memset (nn_chunkref_data (&msg->hdr), 0, sizeof (uint64_t));
-    memcpy (nn_chunkref_data (&msg->hdr), &pipe, sizeof (pipe));
+    nn_chunkref_term (&msg->sphdr);
+    nn_chunkref_init (&msg->sphdr, sizeof (uint64_t));
+    memset (nn_chunkref_data (&msg->sphdr), 0, sizeof (uint64_t));
+    memcpy (nn_chunkref_data (&msg->sphdr), &pipe, sizeof (pipe));
 
     return 0;
 }
 
-int nn_xbus_setopt (struct nn_sockbase *self, int level, int option,
-        const void *optval, size_t optvallen)
+int nn_xbus_setopt (NN_UNUSED struct nn_sockbase *self, NN_UNUSED int level,
+    NN_UNUSED int option,
+    NN_UNUSED const void *optval, NN_UNUSED size_t optvallen)
 {
     return -ENOPROTOOPT;
 }
 
-int nn_xbus_getopt (struct nn_sockbase *self, int level, int option,
-        void *optval, size_t *optvallen)
+int nn_xbus_getopt (NN_UNUSED struct nn_sockbase *self, NN_UNUSED int level,
+    NN_UNUSED int option,
+    NN_UNUSED void *optval, NN_UNUSED size_t *optvallen)
 {
     return -ENOPROTOOPT;
 }

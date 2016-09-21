@@ -1,5 +1,5 @@
 /*
-    Copyright (c) 2012-2013 250bpm s.r.o.  All rights reserved.
+    Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -23,7 +23,8 @@
 #ifndef NN_TIMERSET_INCLUDED
 #define NN_TIMERSET_INCLUDED
 
-#include "../utils/clock.h"
+#include <stdint.h>
+
 #include "../utils/list.h"
 
 /*  This class stores a list of timeouts and reports the next one to expire
@@ -35,7 +36,6 @@ struct nn_timerset_hndl {
 };
 
 struct nn_timerset {
-    struct nn_clock clock;
     struct nn_list timeouts;
 };
 
